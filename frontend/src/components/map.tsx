@@ -54,7 +54,8 @@ const Map: React.FC<MapProps> = ({ workers }) => {
       };
       
       // Estilo base de MapLibre
-      const MAPLIBRE_STYLE = {
+      // Update the map style specification to match what maplibregl expects
+      const MAPLIBRE_STYLE: maplibregl.StyleSpecification = {
         version: 8,
         sources: {
           'carto-voyager': {
@@ -72,9 +73,16 @@ const Map: React.FC<MapProps> = ({ workers }) => {
             minzoom: 0,
             maxzoom: 19
           }
-        ]
+        ],
+        // Adding required properties to satisfy the StyleSpecification type
+        name: "Carto Voyager",
+        metadata: {},
+        center: [INITIAL_VIEW_STATE.longitude, INITIAL_VIEW_STATE.latitude],
+        zoom: INITIAL_VIEW_STATE.zoom,
+        bearing: INITIAL_VIEW_STATE.bearing,
+        pitch: INITIAL_VIEW_STATE.pitch
       };
-
+      
       if (!mapRef.current) {
         mapRef.current = new maplibregl.Map({
           container: 'map',
