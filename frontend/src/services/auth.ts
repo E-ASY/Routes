@@ -1,5 +1,3 @@
-import { apiRequest } from './config';
-
 export interface AuthUser {
   name?: string;
   email?: string;
