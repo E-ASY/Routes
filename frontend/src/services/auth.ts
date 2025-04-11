@@ -15,6 +15,7 @@ interface AuthCheckResponse {
 
 // Get the frontend URL for redirect
 const FRONTEND_URL = window.location.origin; // e.g. http://localhost:5173
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:5000';
 
 export const authService = {
   /**
@@ -29,7 +30,7 @@ export const authService = {
     const encodedReturnTo = encodeURIComponent(returnTo);
     
     // Redirige al login incluyendo la URL de retorno
-    window.location.href = `http://localhost:5000/login?returnTo=${encodedReturnTo}`;
+    window.location.href = `${BACKEND_URL}/login?returnTo=${encodedReturnTo}`;
   },
 
   /**
@@ -40,7 +41,7 @@ export const authService = {
     const returnTo = encodeURIComponent(FRONTEND_URL);
     
     // Usar la ruta de API en lugar de la ruta directa de Auth0
-    window.location.href = `http://localhost:5000/logout?returnTo=${returnTo}`;
+    window.location.href = `${BACKEND_URL}/logout?returnTo=${returnTo}`;
   },
 
   /**
@@ -48,7 +49,8 @@ export const authService = {
    */
   async checkAuthenticated(): Promise<AuthCheckResponse> {
     try {
-      const response = await apiRequest<AuthCheckResponse>('/auth/check');
+      const response = await apiRequest<AuthCheckResponse>('/api/auth/check');
+      console.log('Raw auth check response:', response);
       return response;
     } catch (error) {
       console.error('Authentication check failed:', error);

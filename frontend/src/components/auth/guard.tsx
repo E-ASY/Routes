@@ -70,7 +70,6 @@ const AuthGuard: React.FC<AuthGuardProps> = ({ children }) => {
         setIsLoading(false);
       }
     };
-
     checkAuth();
   }, []);
 

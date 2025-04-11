@@ -37,9 +37,11 @@ app.use(session({
   resave: false,
   saveUninitialized: false,
   cookie: {
-    secure: process.env.NODE_ENV === 'production', // HTTPS en producción
-    httpOnly: true, // Previene acceso desde JS
-    maxAge: 24 * 60 * 60 * 1000 // 24 horas
+    // Allow non-secure cookies during development
+    secure: process.env.NODE_ENV === 'production',
+    httpOnly: true,
+    sameSite: 'none', // Required for cross-domain requests
+    maxAge: 24 * 60 * 60 * 1000
   }
 }));
 const config = {
@@ -59,14 +61,11 @@ app.use('/api/maps', requiresAuth(), mapRoutes);
 app.get('/', (req, res) => {
   try {
     const isAuthenticated = req.oidc.isAuthenticated();
-    
     if (isAuthenticated && req.oidc.user) {
       // Procesar la autenticación con Auth0 solo si el usuario está autenticado
       const { user, id_token } = req.oidc;
-      
       // Guardar el token en la sesión
       req.session.id_token = id_token;
-      
       // Guardar la información del usuario en la sesión
       req.session.user = {
         name: user.name,
@@ -76,10 +75,8 @@ app.get('/', (req, res) => {
     
     // Obtener la URL de redirección del parámetro state o de la sesión
     const returnTo = req.session.returnTo || req.query.state || 'http://localhost:5173';
-    
     // Limpiar la sesión
     delete req.session.returnTo;
-    
     // Redireccionar al frontend
     return res.redirect(returnTo);
   } catch (error) {

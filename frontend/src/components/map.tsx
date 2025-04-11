@@ -12,7 +12,7 @@ interface MapProps {
   clearCache?: boolean;
 }
 
-const Map: React.FC<MapProps> = ({ workers, clearCache = false }) => {
+const Map: React.FC<MapProps> = ({ workers }) => {
   const mapRef = useRef<maplibregl.Map | null>(null);
   const deckRef = useRef<Deck | null>(null);
   const [pointsByWorker, setPointsByWorker] = useState<MapPoint[] | null>(null);

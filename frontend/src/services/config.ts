@@ -20,6 +20,7 @@ export async function apiRequest<T>(
   const response = await fetch(url, {
     ...defaultOptions,
     ...options,
+    credentials: 'include',
   });
   
   if (!response.ok) {
