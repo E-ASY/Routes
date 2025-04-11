@@ -58,41 +58,30 @@ app.use(auth(config));
 app.use('/api/auth', authRoutes);
 app.use('/api/maps', requiresAuth(), mapRoutes);
 
-// Añadir después de 'cookieParser'
-const jwt = require('jsonwebtoken');
-
-// Y dentro del handler '/'
 app.get('/', (req, res) => {
   try {
     const isAuthenticated = req.oidc.isAuthenticated();
     if (isAuthenticated && req.oidc.user) {
+      // Procesar la autenticación con Auth0 solo si el usuario está autenticado
       const { user, id_token } = req.oidc;
+      // Guardar el token en la sesión
       req.session.id_token = id_token;
+      // Guardar la información del usuario en la sesión
       req.session.user = {
         name: user.name,
         email: user.email,
       };
-      
-      // Generar token JWT para autenticación alternativa
-      const token = jwt.sign(
-        { sub: user.sub, email: user.email, name: user.name },
-        process.env.JWT_SECRET || 'secreto-temporal',
-        { expiresIn: '24h' }
-      );
-      
-      // Redireccionar con token
-      const returnTo = req.session.returnTo || req.query.state || process.env.FRONTEND_URL;
-      delete req.session.returnTo;
-      // Añadir el token como parámetro de consulta
-      return res.redirect(`${returnTo}?auth_token=${token}`);
     }
     
+    // Obtener la URL de redirección del parámetro state o de la sesión
     const returnTo = req.session.returnTo || req.query.state || process.env.FRONTEND_URL;
+    // Limpiar la sesión
     delete req.session.returnTo;
+    // Redireccionar al frontend
     return res.redirect(returnTo);
   } catch (error) {
     console.error('Error en callback:', error);
-    res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:5173'}/error`);
+    res.redirect('http://localhost:5173/error');
   }
 });
 

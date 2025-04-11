@@ -1,3 +1,5 @@
+import { apiRequest } from './config';
+
 export interface AuthUser {
   name?: string;
   email?: string;
@@ -42,44 +44,14 @@ export const authService = {
     window.location.href = `${BACKEND_URL}/logout?returnTo=${returnTo}`;
   },
 
-  // Añade esta función para extraer el token de la URL
-  getAuthToken(): string | null {
-    // Comprobar token en URL
-    const params = new URLSearchParams(window.location.search);
-    const token = params.get('auth_token');
-
-    if (token) {
-      // Guardar token y limpiar URL
-      localStorage.setItem('auth_token', token);
-      window.history.replaceState({}, document.title, window.location.pathname);
-      return token;
-    }
-
-    // Devolver token guardado si existe
-    return localStorage.getItem('auth_token');
-  },
-
+  /**
+   * Checks if the user is authenticated
+   */
   async checkAuthenticated(): Promise<AuthCheckResponse> {
     try {
-      // Usar fetch directamente con posible token de autenticación
-      const token = this.getAuthToken();
-      const headers: HeadersInit = {
-        'Accept': 'application/json'
-      };
-
-      if (token) {
-        headers['Authorization'] = `Bearer ${token}`;
-      }
-
-      const response = await fetch(`${BACKEND_URL}/api/auth/check`, {
-        method: 'GET',
-        credentials: 'include',
-        headers
-      });
-
-      const data = await response.json();
-      console.log('Raw auth check response:', data);
-      return data;
+      const response = await apiRequest<AuthCheckResponse>('/api/auth/check');
+      console.log('Raw auth check response:', response);
+      return response;
     } catch (error) {
       console.error('Authentication check failed:', error);
       return { isAuthenticated: false };
