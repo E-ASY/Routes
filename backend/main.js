@@ -37,9 +37,9 @@ app.use(session({
   resave: false,
   saveUninitialized: false,
   cookie: {
-    secure: true, // IMPORTANTE: en producción DEBE ser true
+    secure: true,
     httpOnly: true,
-    sameSite: 'none', // CRUCIAL para cross-domain
+    sameSite: 'none',
     maxAge: 24 * 60 * 60 * 1000
   }
 }));
@@ -50,13 +50,20 @@ const config = {
   secret: 'a long, randomly-generated string stored in env',
   baseURL: process.env.AUTH0_BASE_URL,
   clientID: process.env.AUTH0_CLIENT_ID,
-  issuerBaseURL: process.env.AUTH0_ISSUER_BASE_URL
+  issuerBaseURL: process.env.AUTH0_ISSUER_BASE_URL,
+  session: {
+    cookie: {
+      secure: true, 
+      httpOnly: true,
+      sameSite: 'None',
+    }
+  }
 };
 
 // auth router attaches /login, /logout, and /callback routes to the baseURL
 app.use(auth(config));
-app.use('/api/auth', authRoutes);
-app.use('/api/maps', requiresAuth(), mapRoutes);
+app.use('/auth', authRoutes);
+app.use('/maps', requiresAuth(), mapRoutes);
 
 app.get('/', (req, res) => {
   try {

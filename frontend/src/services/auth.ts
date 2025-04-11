@@ -49,7 +49,7 @@ export const authService = {
    */
   async checkAuthenticated(): Promise<AuthCheckResponse> {
     try {
-      const response = await apiRequest<AuthCheckResponse>('/api/auth/check');
+      const response = await apiRequest<AuthCheckResponse>('/auth/check');
       console.log('Raw auth check response:', response);
       return response;
     } catch (error) {
