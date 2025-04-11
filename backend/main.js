@@ -24,10 +24,10 @@ app.use(cookieParser());
 
 // Configuración de CORS (solo permite origen específico)
 app.use(cors({
-  origin: ['http://localhost:5173', 'http://localhost:3000'],
+  origin: ['http://localhost:5173', 'http://localhost:3000', 'https://acufade-routes.vercel.app', process.env.FRONTEND_URL],
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  allowedHeaders: ['Content-Type', 'Authorization', 'Cookie']
 }));
 
 
@@ -37,13 +37,13 @@ app.use(session({
   resave: false,
   saveUninitialized: false,
   cookie: {
-    // Allow non-secure cookies during development
-    secure: process.env.NODE_ENV === 'production',
+    secure: true, // IMPORTANTE: en producción DEBE ser true
     httpOnly: true,
-    sameSite: 'none', // Required for cross-domain requests
+    sameSite: 'none', // CRUCIAL para cross-domain
     maxAge: 24 * 60 * 60 * 1000
   }
 }));
+
 const config = {
   authRequired: false,
   auth0Logout: true,
@@ -58,30 +58,41 @@ app.use(auth(config));
 app.use('/api/auth', authRoutes);
 app.use('/api/maps', requiresAuth(), mapRoutes);
 
+// Añadir después de 'cookieParser'
+const jwt = require('jsonwebtoken');
+
+// Y dentro del handler '/'
 app.get('/', (req, res) => {
   try {
     const isAuthenticated = req.oidc.isAuthenticated();
     if (isAuthenticated && req.oidc.user) {
-      // Procesar la autenticación con Auth0 solo si el usuario está autenticado
       const { user, id_token } = req.oidc;
-      // Guardar el token en la sesión
       req.session.id_token = id_token;
-      // Guardar la información del usuario en la sesión
       req.session.user = {
         name: user.name,
         email: user.email,
       };
+      
+      // Generar token JWT para autenticación alternativa
+      const token = jwt.sign(
+        { sub: user.sub, email: user.email, name: user.name },
+        process.env.JWT_SECRET || 'secreto-temporal',
+        { expiresIn: '24h' }
+      );
+      
+      // Redireccionar con token
+      const returnTo = req.session.returnTo || req.query.state || process.env.FRONTEND_URL;
+      delete req.session.returnTo;
+      // Añadir el token como parámetro de consulta
+      return res.redirect(`${returnTo}?auth_token=${token}`);
     }
     
-    // Obtener la URL de redirección del parámetro state o de la sesión
-    const returnTo = req.session.returnTo || req.query.state || 'http://localhost:5173';
-    // Limpiar la sesión
+    const returnTo = req.session.returnTo || req.query.state || process.env.FRONTEND_URL;
     delete req.session.returnTo;
-    // Redireccionar al frontend
     return res.redirect(returnTo);
   } catch (error) {
     console.error('Error en callback:', error);
-    res.redirect('http://localhost:5173/error');
+    res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:5173'}/error`);
   }
 });
 
