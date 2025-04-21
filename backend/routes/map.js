@@ -1,11 +1,18 @@
+/**
+ * Archivo: map.js
+ * Descripción: Define las rutas API relacionadas con los mapas, puntos, trabajadores y rutas
+ * Este módulo contiene endpoints para obtener datos geoespaciales y gestionar información de trabajadores
+ */
 const express = require('express');
 const router = express.Router();
 const dataService = require('../services/data');
 const routeService = require('../services/routes');
 
 /**
- * Obtiene la tabla de información con los puntos y trabajadores
-*/
+ * @route   GET /data
+ * @desc    Obtiene todos los datos procesados necesarios para la aplicación de mapas
+ * @returns {Object} Datos procesados para visualización en el mapa
+ */
 router.get('/data', async (req, res) => {
   try {
     const data = await dataService.getProcessedData();
@@ -18,31 +25,29 @@ router.get('/data', async (req, res) => {
 });
 
 /**
- * Obtiene todos los puntos por trabajadores
+ * @route   GET /points
+ * @desc    Obtiene todos los puntos geográficos asignados a los trabajadores especificados
+ * @param   {String|Array} req.query.workers - ID o IDs de trabajadores
+ * @returns {Object} Puntos geográficos, total y trabajadores consultados
  */
 router.get('/points', async (req, res) => {
   try {
     const { workers } = req.query;
-    
     if (!workers) {
       return res.status(400).json({ 
         error: 'Se requiere el parámetro workers' 
       });
     }
-    
     // Normalizar los IDs de trabajadores (convertir a array si es un único valor)
     const workerIds = Array.isArray(workers) ? workers : [workers];
-    
     // Obtener los puntos utilizando el servicio de datos
     const points = await dataService.getPointsForWorkers(workerIds);
-    
     // Devolver los puntos como respuesta JSON
     res.json({
       points,
       total: points.length,
       workers: workerIds
     });
-    
   } catch (error) {
     console.error('Error al obtener puntos para trabajadores:', error);
     res.status(500).json({ 
@@ -53,8 +58,10 @@ router.get('/points', async (req, res) => {
 });
 
 /**
- * Obtiene todos los trabajadores
- * Si se proporcionan IDs específicos, filtrar por ellos
+ * @route   GET /workers
+ * @desc    Obtiene información de todos los trabajadores o un subconjunto específico
+ * @param   {String|Array} [req.query.workers] - ID o IDs de trabajadores (opcional)
+ * @returns {Array} Lista de trabajadores con su información
  */
 router.get('/workers', async (req, res) => {
   try {
@@ -76,19 +83,19 @@ router.get('/workers', async (req, res) => {
 
 
 /**
- * Obtiene rutas para los trabajadores seleccionados
+ * @route   GET /routes
+ * @desc    Obtiene las rutas optimizadas para los trabajadores seleccionados
+ * @param   {String|Array} req.query.workers - ID o IDs de trabajadores
+ * @returns {Object} Rutas calculadas para los trabajadores especificados
  */
 router.get('/routes', async (req, res) => {
   try {
     const { workers } = req.query;
-    
     if (!workers) {
       return res.status(400).json({ error: 'Se requiere el parámetro workers' });
     }
-    
     const workerIds = Array.isArray(workers) ? workers : [workers];
     const routes = await routeService.getRoutesForWorkers(workerIds);
-    
     res.json(routes);
   } catch (error) {
     console.error('Error al obtener rutas:', error);

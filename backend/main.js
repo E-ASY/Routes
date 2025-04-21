@@ -10,19 +10,14 @@ const authRoutes = require('./routes/auth');
 const { auth } = require('express-openid-connect');
 const { requiresAuth } = require('express-openid-connect');
 
-
-// Cargar variables de entorno
 dotenv.config();
-
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// Middleware de seguridad
 app.use(helmet());
 app.use(express.json());
 app.use(cookieParser());
 
-// Configuración de CORS (solo permite origen específico)
 app.use(cors({
   origin: ['http://localhost:5173', 'http://localhost:3000', 'https://acufade-routes.vercel.app', process.env.FRONTEND_URL],
   credentials: true,
@@ -31,7 +26,11 @@ app.use(cors({
 }));
 
 
-// Configuración de sesiones
+/**
+ * Configuración de sesiones de usuario
+ * Almacena información de sesión con cookies seguras
+ * Utiliza un secreto para firmar cookies y evitar manipulación
+ */
 app.use(session({
   secret: process.env.SESSION_SECRET || 'tu-secreto-super-seguro',
   resave: false,
@@ -44,10 +43,15 @@ app.use(session({
   }
 }));
 
+/**
+ * Configuración de Auth0 para autenticación
+ * Define los parámetros necesarios para conectar con el servicio de Auth0
+ * Los valores sensibles se obtienen de variables de entorno
+ */
 const config = {
   authRequired: false,
   auth0Logout: true,
-  secret: 'a long, randomly-generated string stored in env',
+  secret: process.env.AUTH0_CLIENT_SECRET,
   baseURL: process.env.AUTH0_BASE_URL,
   clientID: process.env.AUTH0_CLIENT_ID,
   issuerBaseURL: process.env.AUTH0_ISSUER_BASE_URL,
@@ -60,11 +64,19 @@ const config = {
   }
 };
 
-// auth router attaches /login, /logout, and /callback routes to the baseURL
+/**
+ * Configuración de rutas de autenticación
+ * El middleware de Auth0 agrega automáticamente rutas para /login, /logout y /callback
+ */
 app.use(auth(config));
 app.use('/auth', authRoutes);
 app.use('/maps', requiresAuth(), mapRoutes);
 
+/**
+ * Ruta principal / - gestiona la autenticación y redirecciones
+ * @route GET /
+ * @description Procesa la información de autenticación y redirige al frontend
+ */
 app.get('/', (req, res) => {
   try {
     const isAuthenticated = req.oidc.isAuthenticated();
@@ -92,11 +104,11 @@ app.get('/', (req, res) => {
   }
 });
 
-app.get('/api/health', requiresAuth(), (req, res) => {
-  res.json({ status: 'ok', environment: process.env.NODE_ENV });
-});
-
-// Manejador de errores global
+/**
+ * Middleware de manejo global de errores
+ * Captura cualquier error no controlado en las rutas y devuelve una respuesta apropiada
+ * En entornos de producción, oculta detalles técnicos del error al usuario
+ */
 app.use((err, req, res, next) => {
   console.error(err.stack);
   res.status(500).json({

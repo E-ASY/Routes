@@ -4,18 +4,24 @@ const { getPointsForWorkers } = require('./data'); // Importar la función desde
 
 dotenv.config();
 
-// Configuración de Google Routes API
 const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY;
 const ROUTE_SERVICE_URL = "https://routes.googleapis.com/directions/v2:computeRoutes";
-const BATCH_SIZE = 5;
-const BATCH_DELAY = 1000;
+const BATCH_SIZE = 5; // Número máximo de rutas por lote para evitar sobrecargar la API
+const BATCH_DELAY = 1000; // Milisegundos de espera entre lotes
 
-// Caché de rutas
+/**
+ * Sistemas de caché para almacenar rutas y evitar peticiones repetidas
+ * - routeCache: Almacena rutas individuales por origen-destino 
+ * - workerRoutesCache: Almacena conjuntos de rutas por trabajador
+ */
 const routeCache = new Map();
 const workerRoutesCache = new Map();
 
 /**
  * Genera una clave única para cada ruta basada en origen y destino
+ * @param {Object} origin - Coordenadas de origen {lat, lon}
+ * @param {Object} destination - Coordenadas de destino {lat, lon}
+ * @returns {string} Clave única para identificar la ruta en caché
  */
 function generateRouteKey(origin, destination) {
   return `${origin.lat}|${origin.lon}|${destination.lat}|${destination.lon}`;
@@ -23,6 +29,9 @@ function generateRouteKey(origin, destination) {
 
 /**
  * Obtiene una ruta desde Google Routes API o de la caché
+ * @param {Object} origin - Coordenadas de origen {lat, lon}
+ * @param {Object} destination - Coordenadas de destino {lat, lon}
+ * @returns {Array|null} Array de coordenadas que forman la polilínea de la ruta o null si no se encontró
  */
 async function getRouteFromGoogle(origin, destination) {
   try {
@@ -33,7 +42,11 @@ async function getRouteFromGoogle(origin, destination) {
       return routeCache.get(routeKey);
     }
 
-    // Función para obtener ruta con un modo específico
+    /**
+     * Función interna para obtener ruta con un modo de transporte específico
+     * @param {string} travelMode - Modo de transporte ("TRANSIT", "DRIVE", etc.)
+     * @returns {Array|null} Coordenadas de la ruta o null si no se encontró
+     */
     const getRoute = async (travelMode) => {
       const requestBody = {
         origin: { location: { latLng: { latitude: origin.lat, longitude: origin.lon } } },
@@ -70,12 +83,10 @@ async function getRouteFromGoogle(origin, destination) {
       console.log(`No se encontró ruta con TRANSIT de ${origin.lat},${origin.lon} a ${destination.lat},${destination.lon}. Intentando con DRIVE...`);
       route = await getRoute("DRIVE");
     }
-
     // Guardar en caché
     if (route) {
       routeCache.set(routeKey, route);
     }
-
     return route;
   } catch (error) {
     console.error(`Error al obtener ruta de Google:`, error.message);
@@ -84,16 +95,17 @@ async function getRouteFromGoogle(origin, destination) {
 }
 
 /**
- * Prepara puntos para crear rutas (origen y destino para cada punto)
+ * Prepara puntos para crear rutas organizando pares de origen-destino
+ * @param {Array} points - Array de puntos con coordenadas geográficas
+ * @returns {Array} Lista de objetos con origen, destino e ID de trabajador para cada ruta
  */
 function prepareRoutePoints(points) {
     if (!Array.isArray(points) || points.length === 0) {
       console.log("No hay puntos para preparar rutas");
       return [];
     } 
-    // Agrupar puntos por trabajador (soporta tanto worker como workerId)
+    // Agrupar puntos por trabajador
     const pointsByWorker = points.reduce((acc, point) => {
-      // Usar worker O workerId, cualquiera que esté definido
       const workerId = point.id;
       // Convertir a string para asegurar consistencia como clave del objeto
       const workerIdStr = String(workerId);
@@ -134,15 +146,15 @@ function prepareRoutePoints(points) {
   }
 
 /**
- * Obtiene rutas para los trabajadores seleccionados
+ * Obtiene rutas optimizadas para los trabajadores seleccionados
+ * @param {Array} workers - Array de IDs de trabajadores
+ * @returns {Object} Objeto con rutas, información por trabajador y totales
  */
 async function getRoutesForWorkers(workers) {
   try {
-    // Verificar input
     if (!workers || workers.length === 0) {
       return [];
     }
-
     // Verificar qué trabajadores ya tienen rutas en caché
     const cachedWorkers = [];
     const workersToFetch = [];
@@ -153,8 +165,6 @@ async function getRoutesForWorkers(workers) {
         workersToFetch.push(worker);
       }
     });
-
-    // Obtener rutas de la caché para los trabajadores que ya tienen datos
     let workerRoutes = [];
     cachedWorkers.forEach(worker => {
       const cachedRoutes = workerRoutesCache.get(worker);
@@ -162,7 +172,6 @@ async function getRoutesForWorkers(workers) {
         workerRoutes = [...workerRoutes, ...cachedRoutes];
       }
     });
-
     // Si todos los trabajadores solicitados ya tienen datos en caché, devolver los datos
     if (workersToFetch.length === 0) {
       console.log("Todas las rutas se obtuvieron de la caché");
@@ -178,23 +187,15 @@ async function getRoutesForWorkers(workers) {
     // Obtener puntos para rutas de trabajadores que no están en caché
     console.log(`Obteniendo rutas para: ${workersToFetch.join(', ')}`);
     const pointsData = await getPointsForWorkers(workersToFetch);
-    
-    // Si no hay puntos, retornar las rutas que ya tenemos
     if (!pointsData || pointsData.length === 0) {
       console.log("No se encontraron puntos para los trabajadores solicitados");
       return workerRoutes;
     }
-    
-    // Preparar pares de origen-destino para calcular rutas
     const workerRouteRequests = prepareRoutePoints(pointsData);
-
-    // Procesar las rutas por lotes para evitar exceder los límites de recursos
     const newWorkerRoutes = [];
     const workerRoutesMap = new Map();
-
     for (let i = 0; i < workerRouteRequests.length; i += BATCH_SIZE) {
       const batch = workerRouteRequests.slice(i, i + BATCH_SIZE);
-      
       // Procesar el lote actual
       const batchPromises = batch.map(async (request) => {
         try {
@@ -205,13 +206,11 @@ async function getRoutesForWorkers(workers) {
             origin: request.origin,
             destination: request.destination
           };
-          
           // Agrupar rutas por trabajador
           if (!workerRoutesMap.has(request.worker)) {
             workerRoutesMap.set(request.worker, []);
           }
           workerRoutesMap.get(request.worker).push(workerRoute);
-          
           return workerRoute;
         } catch (error) {
           console.error(`Error obteniendo ruta para ${request.worker}:`, error);
@@ -227,21 +226,17 @@ async function getRoutesForWorkers(workers) {
       
       const batchResults = await Promise.all(batchPromises);
       newWorkerRoutes.push(...batchResults);
-      
       // Añadir un pequeño retraso entre lotes para no sobrecargar la API
       if (i + BATCH_SIZE < workerRouteRequests.length) {
         await new Promise(resolve => setTimeout(resolve, BATCH_DELAY));
       }
     }
-
     // Guardar las nuevas rutas en la caché
     workerRoutesMap.forEach((routes, worker) => {
       workerRoutesCache.set(worker, routes);
     });
-
     // Combinar las rutas existentes con las nuevas
     workerRoutes = [...workerRoutes, ...newWorkerRoutes];
-    
     return {
       routes: workerRoutes,
       workers: Object.fromEntries([...workerRoutesMap.entries()]), // Devolver también las rutas agrupadas por trabajador
@@ -254,7 +249,8 @@ async function getRoutesForWorkers(workers) {
 }
 
 /**
- * Limpia la caché de rutas
+ * Limpia la caché de rutas para forzar la obtención de datos frescos
+ * @returns {Object} Objeto con estado de éxito y mensaje de confirmación
  */
 function clearRouteCache() {
   routeCache.clear();

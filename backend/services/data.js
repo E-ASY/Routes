@@ -1,14 +1,23 @@
+/**
+ * Archivo: data.js
+ * Descripción: Servicio de datos para la gestión de información de trabajadores y ubicaciones geográficas
+ * Este módulo se encarga de obtener, procesar y transformar datos desde la API de Velneo
+ * para ser utilizados en la aplicación de rutas de ACUFADE
+ */
 const axios = require('axios');
 const dotenv = require('dotenv');
 const { join } = require('path');
 
 dotenv.config();
-
-// URLs base y configuración
 const API_KEY = process.env.VELNEO_API_KEY;
 const BASE_URL = process.env.VELNEO_API_BASE_URL;
 
-// Función para obtener datos de un endpoint específico
+/**
+ * Obtiene datos de un endpoint específico de la API de Velneo
+ * @param {string} endpoint - Nombre del endpoint a consultar
+ * @param {Object} params - Parámetros adicionales para la consulta
+ * @returns {Array} Datos obtenidos del endpoint solicitado
+ */
 async function fetchData(endpoint, params = {}) {
   try {
     const url = `${BASE_URL}/${endpoint}`;
@@ -20,10 +29,13 @@ async function fetchData(endpoint, params = {}) {
   }
 }
 
-// Obtener datos de múltiples endpoints
+/**
+ * Obtiene datos de múltiples endpoints en paralelo
+ * @returns {Object} Objeto con los datos de los diferentes endpoints (ent_m, ate_m, ent_rel_m)
+ */
 async function fetchAllData() {
   try {
-    // Ejemplo de peticiones a diferentes endpoints
+    // Realizar peticiones paralelas a diferentes endpoints para optimizar tiempo
     const [ent_m, ate_m, ent_rel_m] = await Promise.all([
       fetchData('ent_m', { 'page[number]': 1, fields: 'id,name,ape_1,ape_2,cif,es_tra_sim' }),
       fetchData('ate_m', { 'page[number]': 1, fields: 'id,dir_lon,dir_lat' }),
@@ -37,7 +49,15 @@ async function fetchAllData() {
   }
 }
 
-// Realizar INNER JOIN entre datasets preservando datos relacionados anteriores
+/**
+ * Realiza un INNER JOIN entre dos conjuntos de datos preservando relaciones anteriores
+ * @param {Array} primaryData - Conjunto de datos principal
+ * @param {Array} foreignData - Conjunto de datos secundario a unir
+ * @param {string} primaryKey - Nombre de la clave en el conjunto principal
+ * @param {string} foreignKey - Nombre de la clave en el conjunto secundario
+ * @param {string} relatedField - Nombre del campo donde se almacenarán los datos relacionados
+ * @returns {Array} Datos unidos con relaciones preservadas
+ */
 function joinData(primaryData, foreignData, primaryKey, foreignKey, relatedField = 'related') {
     // Filtrar directamente para incluir solo elementos con coincidencias
     return primaryData
@@ -80,7 +100,12 @@ function joinData(primaryData, foreignData, primaryKey, foreignKey, relatedField
       .filter(item => item !== null); // Eliminar todos los null (registros sin coincidencias)
   }
 
-  function cleanGeographicData(data) {
+/**
+ * Limpia y procesa datos geográficos, filtrando según criterios específicos
+ * @param {Array} data - Datos geográficos con información relacionada de personas
+ * @returns {Array} Datos geográficos limpios y formateados
+ */
+function cleanGeographicData(data) {
     // Filtrar los datos según las condiciones especificadas
     return data
       .filter(item => {
@@ -88,11 +113,7 @@ function joinData(primaryData, foreignData, primaryKey, foreignKey, relatedField
         if (!item.related || item.related.length === 0) {
           return false;
         }
-        
-        // Obtener datos personales del registro relacionado
-        const personaInfo = item.related[0];
-        
-        // Verificar que es_tra_sim sea false (rechazar cuando es true)
+        const personaInfo = item.related[0];    
         const traSim = personaInfo.es_tra_sim === false;
         
         // Verificar que dir_lat y dir_lon no sean 0
@@ -103,52 +124,41 @@ function joinData(primaryData, foreignData, primaryKey, foreignKey, relatedField
           item.dir_lon !== null &&
           item.dir_lat !== undefined && 
           item.dir_lon !== undefined;
-        
-        // Para el ejemplo que proporcionaste:
-        // 1. Las coordenadas son 0,0 -> validCoordinates = false
-        // 2. es_tra_sim es false -> traSim = true
-        // El resultado final sería (false && true) = false, por lo que se excluiría este registro
-        
+
         // Solo incluir elementos que tengan:
         // 1. Coordenadas válidas (no cero)
         // 2. es_tra_sim = false
         return validCoordinates && traSim;
       })
       .map(item => {
-        // Obtener el registro de datos personales
         const personaRelacionada = item.related[0];
-        
-        // Transformar el resultado para devolverlo en el formato deseado
         return {
           id: item.id,
-          // Datos personales
           name: personaRelacionada.name || '',
           ape_1: personaRelacionada.ape_1 || '',
           ape_2: personaRelacionada.ape_2 || '',
           cif: personaRelacionada.cif || '',
-          es_tra_sim: false, // Sabemos que es false porque lo filtramos arriba
-          // Coordenadas (ya validadas para que no sean 0)
+          es_tra_sim: false,
           dir_lat: parseFloat(item.dir_lat),
           dir_lon: parseFloat(item.dir_lon)
         };
       });
   }
 
-
-  function cleanWorkersData(data) {
+/**
+ * Procesa y agrupa datos de trabajadores, filtrando por trabajadores activos (es_tra_sim = true)
+ * @param {Array} data - Datos de personas con relaciones
+ * @returns {Array} Trabajadores agrupados con sus entidades relacionadas
+ */
+function cleanWorkersData(data) {
     // Agrupar los datos por ent_rel
     const workerGroups = {};
-    
-    // Primera pasada: agrupar por ent_rel
     data.forEach(item => {
       const entRel = item.ent_rel;
       // Si no tenemos info del trabajador todavía o no es válida
       if (!workerGroups[entRel]) {
-        // Verificar que hay datos personales relacionados
         if (item.related && item.related.length > 0) {
           const workerInfo = item.related[0];
-          
-          // Solo incluir trabajadores con es_tra_sim = true
           if (workerInfo.es_tra_sim === true) {
             workerGroups[entRel] = {
               id: entRel,
@@ -163,7 +173,6 @@ function joinData(primaryData, foreignData, primaryKey, foreignKey, relatedField
         }
       }
       
-      // Si existe la información del trabajador (ya sea que acabamos de crearla o ya existía)
       if (workerGroups[entRel]) {
         // Añadir la entidad relacionada sin información duplicada
         if (item.off === false) {
@@ -186,18 +195,14 @@ function joinData(primaryData, foreignData, primaryKey, foreignKey, relatedField
  * @return {Array} - Trabajadores con datos geográficos añadidos a sus entidades
  */
 function enrichWorkerData(trabajadores, geoUsers) {
-    // Crear un mapa para buscar usuarios geográficos por id rápidamente
     const geoUserMap = {};
-    // Manejar tanto si geoUsers es un objeto único como si es un array
     if (Array.isArray(geoUsers)) {
-      // Si es un array, procesarlo como antes
       geoUsers.forEach(user => {
         if (user && user.id) {
           geoUserMap[user.id] = user;
         }
       });
     } else if (geoUsers && typeof geoUsers === 'object' && geoUsers.id) {
-      // Si es un objeto único, agregarlo al mapa directamente
       geoUserMap[geoUsers.id] = geoUsers;
     } else {
       console.warn('geoUsers no tiene el formato esperado:', geoUsers);
@@ -205,17 +210,13 @@ function enrichWorkerData(trabajadores, geoUsers) {
     
     // Para cada trabajador, enriquecer sus entidades con datos geográficos
     return trabajadores.map(trabajador => {
-      // Procesar cada entidad del trabajador
       const entidadesEnriquecidas = trabajador.entidades.map(entidad => {
-        // Buscar si existe un usuario geográfico con el mismo id que el ent
         const geoUser = geoUserMap[entidad.ent];
         
         if (geoUser) {
-          // Si existe, combinar la información
           return {
             ent: entidad.ent,
             off: entidad.off,
-            // Datos del usuario geográfico
             name: geoUser.name,
             ape_1: geoUser.ape_1,
             ape_2: geoUser.ape_2,
@@ -223,11 +224,9 @@ function enrichWorkerData(trabajadores, geoUsers) {
             dir_lon: geoUser.dir_lon,
           };
         } else {
-          // Si no existe, devolver la entidad original
           return entidad;
         }
       });
-      // Devolver el trabajador con sus entidades enriquecidas
       return {
         ...trabajador,
         entidades: entidadesEnriquecidas
@@ -235,6 +234,10 @@ function enrichWorkerData(trabajadores, geoUsers) {
     });
 }
 
+/**
+ * Obtiene y procesa todos los datos necesarios de la API
+ * @returns {Object} Datos procesados y listos para usar en la aplicación
+ */
 async function getProcessedData() {
   const { ent_m, ate_m, ent_rel_m } = await fetchAllData();
   const geograficos_datos_persona = joinData(ate_m, ent_m, 'id', 'id');
@@ -248,9 +251,13 @@ async function getProcessedData() {
   };
 }
 
+/**
+ * Obtiene los puntos geográficos asignados a los trabajadores especificados
+ * @param {Array} workers - IDs de los trabajadores 
+ * @returns {Array} Puntos geográficos con información de trabajadores
+ */
 async function getPointsForWorkers(workers) {
   try {
-    // Obtener puntos para rutas de trabajadores que no están en caché
     console.log(`Obteniendo puntos para: ${workers.join(', ')}`);
     const pointsData = await getProcessedData();
     // Filtrar los datos para obtener solo los trabajadores solicitados
@@ -277,13 +284,17 @@ async function getPointsForWorkers(workers) {
   }
 }
 
+/**
+ * Obtiene todos los puntos geográficos disponibles
+ * @returns {Array} Lista de todos los puntos geográficos
+ */
 async function getPoints() {
     try {
       const pointsData = await getProcessedData();
       // Filtrar los datos para obtener solo los trabajadores solicitados
       const points = filteredData.flatMap(worker => 
           worker.entidades
-            .filter(entidad => entidad.dir_lat && entidad.dir_lon) // Asegurar que existen coordenadas
+            .filter(entidad => entidad.dir_lat && entidad.dir_lon)
             .map(entidad => ({
               lat: entidad.dir_lat,
               lon: entidad.dir_lon,
@@ -302,10 +313,13 @@ async function getPoints() {
     }
   }
 
+/**
+ * Obtiene la lista de todos los trabajadores
+ * @returns {Array} Lista de trabajadores con información básica
+ */
 async function getWorkers() {
   try {
     const data = await getProcessedData();
-    // Filtrar los datos para obtener solo los trabajadores solicitados
     const workers = data.final_data.map(worker => ({
       id: worker.id,
       name: worker.name,
@@ -321,10 +335,14 @@ async function getWorkers() {
   }
 }
 
+/**
+ * Obtiene información de trabajadores específicos por su ID
+ * @param {Array} ids - Lista de IDs de trabajadores a buscar
+ * @returns {Array} Lista de trabajadores que coinciden con los IDs proporcionados
+ */
 async function getWorkersByID(ids) {
   try {
     const data = await getProcessedData();
-    // Filtrar los datos para obtener solo los trabajadores solicitados
     const workers = data.final_data.filter(worker => ids.includes(worker.id.toString())).map(worker => ({
       id: worker.id,
       name: worker.name,
