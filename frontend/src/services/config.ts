@@ -7,7 +7,7 @@ const defaultOptions: RequestInit = {
     'Content-Type': 'application/json',
     'Accept': 'application/json'
   },
-  credentials: 'include' // Para enviar cookies de sesión si usas autenticación
+  credentials: 'include'
 };
 
 // Función auxiliar para hacer llamadas a la API
@@ -24,7 +24,6 @@ export async function apiRequest<T>(
   });
   
   if (!response.ok) {
-    // Handle authentication errors specifically
     if (response.status === 401) {
       throw new Error('Authentication is required for this route');
     }

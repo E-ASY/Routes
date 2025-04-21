@@ -1,5 +1,14 @@
 import { apiRequest } from './config';
 
+/**
+ * Interfaz que define la estructura de datos de un usuario autenticado
+ * @interface AuthUser
+ * @property {string} [name] - Nombre del usuario
+ * @property {string} [email] - Correo electrónico del usuario
+ * @property {string} [picture] - URL de la imagen de perfil del usuario
+ * @property {string} [sub] - Identificador único del usuario en Auth0
+ * @property {any} [key: string] - Propiedad dinámica para campos adicionales
+ */
 export interface AuthUser {
   name?: string;
   email?: string;
@@ -8,18 +17,34 @@ export interface AuthUser {
   [key: string]: any;
 }
 
+/**
+ * Interfaz para la respuesta de verificación de autenticación
+ * @interface AuthCheckResponse
+ * @property {boolean} isAuthenticated - Indica si el usuario está autenticado
+ * @property {AuthUser} [user] - Información del usuario si está autenticado
+ */
 interface AuthCheckResponse {
   isAuthenticated: boolean;
   user?: AuthUser;
 }
 
-// Get the frontend URL for redirect
-const FRONTEND_URL = window.location.origin; // e.g. http://localhost:5173
+/**
+ * URLs de base para redirecciones de autenticación
+ * FRONTEND_URL: Obtenido automáticamente del origen actual
+ * BACKEND_URL: Configurado desde variables de entorno o valor por defecto
+ */
+const FRONTEND_URL = window.location.origin;
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:5000';
 
+/**
+ * Servicio de autenticación que gestiona login, logout y verificación
+ * de estado de autenticación mediante Auth0
+ */
 export const authService = {
   /**
-   * Redirects to the Auth0 login page with proper returnTo params
+   * Redirige al usuario a la página de login de Auth0 con parámetros de retorno
+   * Guarda la ruta actual para volver a ella después de autenticarse
+   * @returns {void}
    */
   login(): void {
     // Guarda la ruta actual para volver a ella después de login
@@ -34,7 +59,9 @@ export const authService = {
   },
 
   /**
-   * Redirects to the Auth0 logout page
+   * Redirige al usuario a la página de logout de Auth0
+   * Cierra la sesión en Auth0 y redirige de vuelta al frontend
+   * @returns {void}
    */
   logout(): void {
     // CORRECCIÓN: Usar la ruta API para cerrar sesión en lugar de la ruta directa
@@ -45,7 +72,9 @@ export const authService = {
   },
 
   /**
-   * Checks if the user is authenticated
+   * Verifica si el usuario está autenticado
+   * Realiza una solicitud al backend para comprobar el estado de autenticación
+   * @returns {Promise<AuthCheckResponse>} Respuesta con el estado de autenticación
    */
   async checkAuthenticated(): Promise<AuthCheckResponse> {
     try {
