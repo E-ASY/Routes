@@ -2,20 +2,20 @@
 
 Sistema de gestión de rutas para trabajadores.
 
-## 📋 Descripción
+## Descripción
 
 ACUFADE Routes es una aplicación web que permite visualizar y optimizar las rutas de los trabajadores que prestan servicios domiciliarios. El sistema muestra en un mapa interactivo las ubicaciones de los usuarios y calcula las rutas más eficientes entre ellos.
 
 ### Características principales
 
-- 🔐 Autenticación segura mediante Auth0
-- 🗺️ Visualización de ubicaciones en mapa interactivo
-- 🚗 Cálculo de rutas optimizadas entre puntos
-- 👥 Gestión de trabajadores y sus asignaciones
-- 📱 Interfaz responsive y moderna
-- 🔄 Actualización en tiempo real de los datos
+-  Autenticación segura mediante Auth0
+-  Visualización de ubicaciones en mapa interactivo
+-  Cálculo de rutas optimizadas entre puntos
+-  Gestión de trabajadores y sus asignaciones
+-  Interfaz responsive y moderna
+-  Actualización en tiempo real de los datos
 
-## 🏗️ Estructura del Proyecto
+## Estructura del Proyecto
 
 El proyecto está dividido en dos partes principales:
 
@@ -31,7 +31,7 @@ acufade-routes/
         └── services/  # Servicios para comunicación con la API
 ```
 
-## 🚀 Instalación y Configuración
+## Instalación y Configuración
 
 ### Requisitos Previos
 
@@ -102,14 +102,14 @@ acufade-routes/
    npm run dev
    ```
 
-## 🔧 Uso
+## Uso
 
 1. Accede a la aplicación en el navegador (por defecto en http://localhost:5173)
 2. Inicia sesión con tus credenciales de Auth0
 3. Selecciona los trabajadores para ver sus ubicaciones asignadas
 4. Las rutas se generarán automáticamente para los trabajadores seleccionados
 
-## 📦 Despliegue
+## Despliegue
 
 ### Backend
 
@@ -124,7 +124,7 @@ git push heroku main
 
 El frontend puede desplegarse en Vercel
 
-## 🛠️ Tecnologías Utilizadas
+## Tecnologías Utilizadas
 
 ### Backend
 - Express.js - Framework web
