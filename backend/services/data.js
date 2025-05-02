@@ -6,7 +6,6 @@
  */
 const axios = require('axios');
 const dotenv = require('dotenv');
-const { join } = require('path');
 
 dotenv.config();
 const API_KEY = process.env.VELNEO_API_KEY;
