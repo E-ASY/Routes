@@ -6,22 +6,52 @@
  */
 const axios = require('axios');
 const dotenv = require('dotenv');
+const NodeCache = require('node-cache');
 
 dotenv.config();
 const API_KEY = process.env.VELNEO_API_KEY;
 const BASE_URL = process.env.VELNEO_API_BASE_URL;
 
 /**
- * Obtiene datos de un endpoint específico de la API de Velneo
+ * Obtiene datos de un endpoint específico de la API de Velneo, recuperando todas las páginas disponibles
  * @param {string} endpoint - Nombre del endpoint a consultar
  * @param {Object} params - Parámetros adicionales para la consulta
- * @returns {Array} Datos obtenidos del endpoint solicitado
+ * @returns {Array} Datos obtenidos de todas las páginas del endpoint solicitado
  */
 async function fetchData(endpoint, params = {}) {
   try {
     const url = `${BASE_URL}/${endpoint}`;
-    const response = await axios.get(url, { params: { ...params, api_key: API_KEY } });
-    return response.data[endpoint];
+    let allData = [];
+    let currentPage = 1;
+    let hasMorePages = true;
+    const pageSize = 100;
+    
+    while (hasMorePages) {
+      // Actualizar número de página en cada iteración
+      const pageParams = { 
+        ...params, 
+        'page[number]': currentPage,
+        'page[size]': pageSize,
+        api_key: API_KEY 
+      };
+      const response = await axios.get(url, { params: pageParams });
+      // Obtener los datos de esta página
+      const pageData = response.data[endpoint] || [];
+      if (pageData.length > 0) {
+        allData = [...allData, ...pageData];
+        currentPage++;
+        // Verificar si hay más páginas:
+        // Si la cantidad de elementos es menor que el tamaño de página, hemos llegado al final
+        if (pageData.length < pageSize) {
+          hasMorePages = false;
+        }
+      } else {
+        // No hay más datos
+        hasMorePages = false;
+      }
+    }
+    
+    return allData;
   } catch (error) {
     console.error(`Error fetching data from ${endpoint}:`, error.message);
     return [];
@@ -34,11 +64,13 @@ async function fetchData(endpoint, params = {}) {
  */
 async function fetchAllData() {
   try {
+    console.log('Iniciando obtención de todos los datos...');
+    
     // Realizar peticiones paralelas a diferentes endpoints para optimizar tiempo
     const [ent_m, ate_m, ent_rel_m] = await Promise.all([
-      fetchData('ent_m', { 'page[number]': 1, fields: 'id,name,ape_1,ape_2,cif,es_tra_sim' }),
-      fetchData('ate_m', { 'page[number]': 1, fields: 'id,dir_lon,dir_lat' }),
-      fetchData('ent_rel_m', { 'page[number]': 1, fields: 'ent,ent_rel,off' })
+      fetchData('ent_m', { fields: 'id,name,ape_1,ape_2,cif,es_tra_sim' }),
+      fetchData('ate_m', { fields: 'id,dir_lon,dir_lat' }),
+      fetchData('ent_rel_m', { fields: 'ent,ent_rel,off,rel_tip' })
     ]);
 
     return { ent_m, ate_m, ent_rel_m };
@@ -158,7 +190,7 @@ function cleanWorkersData(data) {
       if (!workerGroups[entRel]) {
         if (item.related && item.related.length > 0) {
           const workerInfo = item.related[0];
-          if (workerInfo.es_tra_sim === true) {
+          if (workerInfo.es_tra_sim === true && (item.rel_tip == 2 || item.rel_tip == 14)) {
             workerGroups[entRel] = {
               id: entRel,
               name: workerInfo.name,
@@ -174,7 +206,8 @@ function cleanWorkersData(data) {
       
       if (workerGroups[entRel]) {
         // Añadir la entidad relacionada sin información duplicada
-        if (item.off === false) {
+        // Solo incluir entidades con off = false y rel_tip 2 o 14 (tipo de relación a domicilio)
+        if (item.off === false && (item.rel_tip == 2 || item.rel_tip == 14)) {
             workerGroups[entRel].entidades.push({
                 ent: item.ent,
                 off: item.off
@@ -233,11 +266,17 @@ function enrichWorkerData(trabajadores, geoUsers) {
     });
 }
 
-/**
- * Obtiene y procesa todos los datos necesarios de la API
- * @returns {Object} Datos procesados y listos para usar en la aplicación
- */
+const dataCache = new NodeCache({ stdTTL: 3600 }); // Caché de 1 hora
+// Modificar getProcessedData para usar caché
 async function getProcessedData() {
+  // Verificar si los datos ya están en caché
+  const cachedData = dataCache.get('processed_data');
+  if (cachedData) {
+    console.log('Usando datos de caché');
+    return cachedData;
+  }
+
+  // Si no están en caché, obtener y procesar
   const { ent_m, ate_m, ent_rel_m } = await fetchAllData();
   const geograficos_datos_persona = joinData(ate_m, ent_m, 'id', 'id');
   const geo_users = cleanGeographicData(geograficos_datos_persona);
@@ -245,9 +284,11 @@ async function getProcessedData() {
   const datos_trabajadores = cleanWorkersData(datos_personas);
   const final_data = enrichWorkerData(datos_trabajadores, geo_users);
   
-  return {
-    final_data,
-  };
+  const result = { final_data };
+  // Guardar en caché
+  dataCache.set('processed_data', result);
+  
+  return result;
 }
 
 /**
