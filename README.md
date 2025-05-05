@@ -140,3 +140,53 @@ El frontend puede desplegarse en Vercel
 - deck.gl - Visualización de datos geoespaciales
 - Material-UI - Componentes de UI
 - React Select - Componente de selección
+
+## **Roadmap**
+Hoja de ruta de este proyecto, que describe las fases clave que implementaremos para optimizar el rendimiento, reducir costos y mejorar la experiencia de usuario de nuestra aplicación.
+
+### **Sistema de Persistencia de Datos en AWS (o cualquier sistema en la nube válido)**
+
+#### ¿Por qué es necesario?
+
+Actualmente, cada vez que un usuario utiliza la aplicación, realizamos consultas en tiempo real a:
+
+-  La base de datos de **Velneo** para obtener información de trabajadores y clientes.
+-  La API de **Google Routes** para calcular las rutas óptimas.
+
+Esto genera:
+
+- Costos elevados
+- Tiempos de respuesta variables
+
+#### ¿Qué vamos a implementar?
+
+Un sistema que:
+
+- Extraerá automáticamente toda la información necesaria **una vez al día**
+- Procesará y almacenará los datos en **Amazon S3** en formatos optimizados
+
+#### ¿Cómo funcionará?
+
+1. La aplicación consultará **primero** nuestro repositorio en AWS
+2. Solo en **casos excepcionales** recurrirá a las APIs externas
+3. Los datos se actualizarán en **horarios de baja demanda**
+
+---
+
+### **Experiencia de Usuario Mejorada**  
+
+#### ¿Qué vamos a mejorar?
+
+##### Interacción con el mapa
+
+- Mostrar **información detallada** al hacer clic en puntos y rutas
+- Incluir **paneles desplegables** con datos de clientes y trabajadores
+
+##### Personalización del mapa
+
+- **Filtros** por tipo de servicio
+- **Búsqueda avanzada** de clientes y direcciones
+
+##### Responsive
+
+- Diseño **totalmente adaptativo** para móviles y tablets
