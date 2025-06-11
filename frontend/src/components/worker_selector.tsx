@@ -10,9 +10,10 @@ interface WorkerOption {
 
 interface WorkerSelectorProps {
   onFilterChange: (selectedWorkers: string[]) => void;
+  municipalities: string[];
 }
 
-const WorkerSelector: React.FC<WorkerSelectorProps> = ({ onFilterChange }) => {
+const WorkerSelector: React.FC<WorkerSelectorProps> = ({ onFilterChange, municipalities }) => {
   const [selectedOptions, setSelectedOptions] = useState<MultiValue<WorkerOption>>([]);
   const [options, setOptions] = useState<WorkerOption[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
@@ -22,19 +23,25 @@ const WorkerSelector: React.FC<WorkerSelectorProps> = ({ onFilterChange }) => {
   // Cargar los trabajadores desde el backend
   useEffect(() => {
     const loadWorkers = async () => {
+      if (municipalities.length === 0) {
+        setOptions([]);
+        setSelectedOptions([]);
+        return;
+      }
+
+      console.log('Cargando trabajadores para municipios:', municipalities);
       setIsLoading(true);
       setError(null);
+
       try {
-        const workers = await mapsService.getWorkers();
-        
-        // Transformar los trabajadores al formato de opciones de Select
+        const workers = await mapsService.getWorkersByMunicipalities(municipalities);
+        console.log('Trabajadores filtrados:', workers);
+
         const workerOptions: WorkerOption[] = workers.map(worker => ({
-          // El valor es el ID que se pasará a otros componentes
           value: worker.id.toString(),
-          // La etiqueta es lo que se mostrará en el selector
           label: `${worker.name || ''} ${worker.ape_1 || ''} ${worker.ape_2 || ''} (${worker.cif || ''})`
         }));
-        
+
         setOptions(workerOptions);
       } catch (err) {
         console.error('Error al cargar trabajadores:', err);
@@ -45,7 +52,8 @@ const WorkerSelector: React.FC<WorkerSelectorProps> = ({ onFilterChange }) => {
     };
 
     loadWorkers();
-  }, []);
+  }, [municipalities]);
+
 
   // Pasar los IDs de trabajadores seleccionados al componente padre
   useEffect(() => {
@@ -72,6 +80,7 @@ const WorkerSelector: React.FC<WorkerSelectorProps> = ({ onFilterChange }) => {
   return (
     <div className='WorkerSelector-container'>
       <Select
+        isDisabled={municipalities.length === 0}
         options={options}
         isMulti
         isLoading={isLoading}

@@ -47,7 +47,13 @@ const Legend: React.FC<LegendProps> = ({ workers }) => {
             </ListItemIcon>
             <ListItemText
               primary={`${info.name} ${info.ape_1} ${info.ape_2}`}
-              secondary={info.cif}
+              secondary={
+                <>
+                  <span>CIF: {info.cif}</span>
+                  <br />
+                  <span>Disponibilidad: {info.disponibilidad ?? 'N/A'} h</span>
+                </>
+              }
               slotProps={{ primary: { sx: { fontSize: '1rem', fontWeight: '500' } }, secondary: { sx: { fontSize: '0.875rem' } } }}
             />
           </ListItem>

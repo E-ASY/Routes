@@ -7,7 +7,7 @@ const express = require('express');
 const router = express.Router();
 const dataService = require('../services/data');
 const routeService = require('../services/routes');
-
+console.log('mapRoutes cargado');
 /**
  * @route   GET /data
  * @desc    Obtiene todos los datos procesados necesarios para la aplicación de mapas
@@ -57,6 +57,24 @@ router.get('/points', async (req, res) => {
   }
 });
 
+
+/**
+ * @route GET /municipalities
+ * @desc Obtiene la lista de municipios disponibles
+ * @returns {Array} Lista de municipios con sus detalles
+ */
+router.get('/municipalities', async (req, res) => {
+  console.log('Petición recibida para /municipalities');
+  try {
+    const municipalities = await dataService.getMunicipalities();
+    res.json(municipalities);
+  } catch (error) {
+    console.error('Error al obtener municipios:', error);
+    res.status(500).json({ error: 'Error al obtener municipios', details: error.message });
+  }
+});
+
+
 /**
  * @route   GET /workers
  * @desc    Obtiene información de todos los trabajadores o un subconjunto específico
@@ -64,15 +82,26 @@ router.get('/points', async (req, res) => {
  * @returns {Array} Lista de trabajadores con su información
  */
 router.get('/workers', async (req, res) => {
+  console.log('Petición recibida para /workers');
   try {
-    // Si se proporcionan IDs específicos, filtrar por ellos
+    // Filtrar por IDs de trabajadores si se proporcionan
     if (req.query.workers) {
+      console.log('IDs de trabajadores proporcionados:', req.query.workers);
       const workerIds = Array.isArray(req.query.workers) ? req.query.workers : [req.query.workers];
       const workers = await dataService.getWorkersByID(workerIds);
       return res.json(workers);
     }
-    
-    // Si no hay IDs, devolver todos los trabajadores
+    // Filtrar por municipios si se proporcionan
+    if (req.query.municipalities) {
+      const municipalities = Array.isArray(req.query.municipalities)
+        ? req.query.municipalities
+        : [req.query.municipalities];
+      console.log('Municipios proporcionados:', municipalities);
+      const workers = await dataService.getWorkersByMunicipalities(municipalities);
+      return res.json(workers);
+    }
+    // Si no hay filtros, devolver todos los trabajadores
+    console.log('No se proporcionaron filtros, obteniendo todos los trabajadores');
     const workers = await dataService.getWorkers();
     res.json(workers);
   } catch (error) {

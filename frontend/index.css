@@ -27,10 +27,24 @@ body, html {
   margin: 20,20,20,20px;
 }
 
-.WorkerSelector-container {
+.MunicipalitySelector-container {
   position: absolute;
   top: 10px;
   left: 10px;
+  z-index: 10; /* Ensure this is higher than the map's z-index */
+  background: white;
+  padding: 10px;
+  border-radius: 5px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+  width: 100%; /* Make it flexible */
+  max-width: 400px; /* Set a maximum width */
+  box-sizing: border-box; /* Include padding and border in the element's total width and height */
+}
+
+.WorkerSelector-container {
+  position: absolute;
+  top: 10px;
+  left: 420px;
   z-index: 10; /* Ensure this is higher than the map's z-index */
   background: white;
   padding: 10px;

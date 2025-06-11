@@ -30,6 +30,13 @@ export interface MapPoint {
     workerCif: string;
   }
 
+export interface Municipality {
+    id: string;
+    name: string;
+    pre_cps: string;
+    cod_num: string;
+}
+
 /**
  * Representa la información básica de un trabajador
  * @interface Worker
@@ -92,6 +99,24 @@ export const mapsService = {
     const queryParams = workerIds.map(id => `workers=${encodeURIComponent(id)}`).join('&');
     const response = await apiRequest<{points: MapPoint[]}>(`/maps/points?${queryParams}`);
     return response.points;
+  },
+
+  /**
+   * Obtiene la lista de municipios con servicio a domicilio
+   * @returns {Promise<Municipality[]>} Lista de municipios
+   */
+  async getMunicipalities(): Promise<Municipality[]> {
+    return apiRequest<Municipality[]>('/maps/municipalities');
+  },
+
+  /**
+   * Obtiene los trabajadores que prestan servicio en los municipios seleccionados
+   * @param {string[]} municipalities - Array de IDs de municipios
+   * @returns {Promise<Worker[]>} Lista de trabajadores filtrados por municipio
+   */
+  async getWorkersByMunicipalities(municipalities: string[]): Promise<Worker[]> {
+    const queryParams = municipalities.map(m => `municipalities=${encodeURIComponent(m)}`).join('&');
+    return apiRequest<Worker[]>(`/maps/workers?${queryParams}`);
   },
 
   /**
