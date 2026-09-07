@@ -13,81 +13,167 @@ const { join } = require('path');
 dotenv.config();
 const API_KEY = process.env.VELNEO_API_KEY;
 const BASE_URL = process.env.VELNEO_API_BASE_URL;
+/** PERF-004: tamaño de página Velneo (override con VELNEO_PAGE_SIZE) */
+const VELNEO_PAGE_SIZE = Number(process.env.VELNEO_PAGE_SIZE) || 500;
+const VELNEO_MAX_RETRIES = Number(process.env.VELNEO_MAX_RETRIES) || 3;
+const VELNEO_TIMEOUT_MS = Number(process.env.VELNEO_TIMEOUT_MS) || 20000;
+
+/** Velneo puede devolver booleanos como 0/1 o true/false */
+function isTraSim(value) {
+  return value === true || value === 1 || value === '1';
+}
+
+function isUserEntity(value) {
+  return value === false || value === 0 || value === '0';
+}
+
+/** Relación activa: off = false/0 */
+function isRelationActive(off) {
+  return off === false || off === 0 || off === '0';
+}
+
+function idsEqual(a, b) {
+  return String(a) === String(b);
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
 
 /**
- * Obtiene datos de un endpoint específico de la API de Velneo, recuperando todas las páginas disponibles
+ * GET a Velneo con reintentos ante timeout / 5xx / errores de red.
+ */
+async function axiosGetWithRetry(url, config, endpoint) {
+  let lastError;
+  for (let attempt = 1; attempt <= VELNEO_MAX_RETRIES; attempt++) {
+    try {
+      return await axios.get(url, config);
+    } catch (error) {
+      lastError = error;
+      const status = error.response?.status;
+      const retryable =
+        !error.response ||
+        status >= 500 ||
+        error.code === 'ECONNABORTED' ||
+        error.code === 'ETIMEDOUT' ||
+        error.code === 'ECONNRESET';
+      if (!retryable || attempt === VELNEO_MAX_RETRIES) {
+        throw error;
+      }
+      const delayMs = 500 * (2 ** (attempt - 1));
+      console.warn(
+        `Retry ${attempt}/${VELNEO_MAX_RETRIES} endpoint=${endpoint} ` +
+        `reason=${status || error.code || error.message} wait_ms=${delayMs}`
+      );
+      await sleep(delayMs);
+    }
+  }
+  throw lastError;
+}
+
+/**
+ * Obtiene datos de un endpoint específico de la API de Velneo, recuperando todas las páginas disponibles.
+ * PERF-004: page size configurable, push, retry; falla con throw (no [] silencioso).
  * @param {string} endpoint - Nombre del endpoint a consultar
  * @param {Object} params - Parámetros adicionales para la consulta
  * @returns {Array} Datos obtenidos de todas las páginas del endpoint solicitado
  */
 async function fetchData(endpoint, params = {}) {
-    try {
-    const url = `${BASE_URL}/${endpoint}?api_key=${API_KEY}`;
-    console.log(url);
-    let allData = [];
-    let currentPage = 1;
-    let hasMorePages = true;
-    const pageSize = 100;
-    
-    while (hasMorePages) {
-      // Actualizar número de página en cada iteración
-      const pageParams = { 
-        ...params, 
-        'page[number]': currentPage,
-        'page[size]': pageSize
-      };
-      const response = await axios.get(url, { params: pageParams, timeout: 10000 });
-      // Obtener los datos de esta página
-      const pageData = response.data[endpoint] || [];
-      console.log(`Endpoint ${endpoint} - Página ${currentPage}: ${pageData.length} items recibidos`);
-      if (pageData.length > 0) {
-        allData = [...allData, ...pageData];
-        currentPage++;
-        // Verificar si hay más páginas:
-        // Si la cantidad de elementos es menor que el tamaño de página, hemos llegado al final
-        if (pageData.length < pageSize) {
-          hasMorePages = false;
-        }
-      } else {
-        // No hay más datos
-        hasMorePages = false;
+  // api_key solo en la petición HTTP; nunca en logs (SEC-002)
+  const url = `${BASE_URL}/${endpoint}?api_key=${API_KEY}`;
+  console.log(`Consultando Velneo endpoint=${endpoint} pageSize=${VELNEO_PAGE_SIZE}`);
+  const allData = [];
+  let currentPage = 1;
+  let hasMorePages = true;
+
+  while (hasMorePages) {
+    const pageParams = {
+      ...params,
+      'page[number]': currentPage,
+      'page[size]': VELNEO_PAGE_SIZE
+    };
+    const response = await axiosGetWithRetry(
+      url,
+      { params: pageParams, timeout: VELNEO_TIMEOUT_MS },
+      endpoint
+    );
+
+    if (Array.isArray(response.data?.errors) && response.data.errors.length > 0) {
+      const messages = response.data.errors
+        .map(err => (typeof err === 'string' ? err : err.message || JSON.stringify(err)))
+        .join('; ');
+      console.error(`Velneo endpoint=${endpoint} devolvió errors: ${messages}`);
+      if (!response.data[endpoint] || response.data[endpoint].length === 0) {
+        throw new Error(`Velneo ${endpoint}: ${messages}`);
       }
     }
-    console.log(`Total datos obtenidos de ${endpoint}: ${allData.length}`);
-    return allData;
-  } catch (error) {
-    console.error(`Error fetching data from ${endpoint}:`, error.message);
-    return [];
+
+    const pageData = response.data[endpoint] || [];
+    console.log(`Endpoint ${endpoint} - Página ${currentPage}: ${pageData.length} items recibidos`);
+    if (pageData.length > 0) {
+      allData.push(...pageData);
+      currentPage++;
+      if (pageData.length < VELNEO_PAGE_SIZE) {
+        hasMorePages = false;
+      }
+    } else {
+      hasMorePages = false;
+    }
   }
+
+  console.log(`Total datos obtenidos de ${endpoint}: ${allData.length}`);
+  return allData;
 }
 
 /**
- * Obtiene datos de múltiples endpoints en paralelo
- * @returns {Object} Objeto con los datos de los diferentes endpoints (ent_m, ate_m, ent_rel_m, tip_ser, mun_m)
+ * Obtiene datos de múltiples endpoints en paralelo.
+ * Si un endpoint crítico falla o viene vacío, lanza error (no se cachea dataset parcial).
  */
 async function fetchAllData() {
-  try {
-    console.log('Iniciando obtención de todos los datos...');
-    
-    // Realizar peticiones paralelas a diferentes endpoints para optimizar tiempo
-    const [ent_m, ate_m, ent_rel_m, tip_ser, mun_m, tra_m] = await Promise.all([
-      fetchData('ent_m', { fields: 'id,name,ape_1,ape_2,cif,es_tra_sim' }),
-      fetchData('ate_m', { fields: 'id,tip_ser,dir_lon,dir_lat,mun_m' }),
-      fetchData('ent_rel_m', { fields: 'ent,ent_rel,off,rel_tip' }),
-      fetchData('tip_ser', { fields: 'id,ent_m,mun_m,ser_nom' }),
-      fetchData('mun_m', { fields: 'id,name,pre_cps,cod_num' }),
-      fetchData('tra_m', { fields: 'id,tot_hor_con,hor_spapd,hor_pro,hor_cen,hor_uec'})
-    ]);
+  console.log('Iniciando obtención de todos los datos...');
 
-    return { ent_m, ate_m, ent_rel_m, tip_ser, mun_m, tra_m };
-  } catch (error) {
-    console.error('Error fetching all data:', error.message);
-    throw error;
+  const settled = await Promise.allSettled([
+    fetchData('ent_m', { fields: 'id,name,ape_1,ape_2,cif,es_tra_sim' }),
+    fetchData('ate_m', { fields: 'id,tip_ser,dir_lon,dir_lat,mun_m' }),
+    fetchData('ent_rel_m', { fields: 'ent,ent_rel,off,rel_tip' }),
+    fetchData('tip_ser', { fields: 'id,ent_m,mun_m,ser_nom' }),
+    fetchData('mun_m', { fields: 'id,name,pre_cps,cod_num' }),
+    fetchData('tra_m', { fields: 'id,tot_hor_con,hor_spapd,hor_pro,hor_cen,hor_uec' })
+  ]);
+
+  const names = ['ent_m', 'ate_m', 'ent_rel_m', 'tip_ser', 'mun_m', 'tra_m'];
+  const results = {};
+  const failures = [];
+
+  settled.forEach((result, index) => {
+    const name = names[index];
+    if (result.status === 'fulfilled') {
+      results[name] = result.value;
+    } else {
+      results[name] = [];
+      failures.push(`${name}: ${result.reason?.message || result.reason}`);
+    }
+  });
+
+  // mun_m puede fallar (permisos) y usar fallback; el resto es crítico
+  const critical = ['ent_m', 'ate_m', 'ent_rel_m', 'tip_ser', 'tra_m'];
+  for (const name of critical) {
+    if (!results[name] || results[name].length === 0) {
+      const detail = failures.find(f => f.startsWith(`${name}:`)) || `${name} vacío`;
+      throw new Error(`Carga Velneo incompleta (${detail}). No se cacheará.`);
+    }
   }
+
+  if (failures.length > 0) {
+    console.warn('Endpoints no críticos con error:', failures.join(' | '));
+  }
+
+  return results;
 }
 
 /**
- * Realiza un INNER JOIN entre dos conjuntos de datos preservando relaciones anteriores
+ * Realiza un INNER JOIN indexado O(n+m) entre dos conjuntos de datos.
+ * Indexa foreignData por foreignKey y asocia matches a cada fila de primaryData.
  * @param {Array} primaryData - Conjunto de datos principal
  * @param {Array} foreignData - Conjunto de datos secundario a unir
  * @param {string} primaryKey - Nombre de la clave en el conjunto principal
@@ -96,46 +182,47 @@ async function fetchAllData() {
  * @returns {Array} Datos unidos con relaciones preservadas
  */
 function joinData(primaryData, foreignData, primaryKey, foreignKey, relatedField = 'related') {
-    // Filtrar directamente para incluir solo elementos con coincidencias
-    return primaryData
-      .map(primary => {
-        const newRelatedItems = foreignData.filter(foreign => 
-          foreign[foreignKey] === primary[primaryKey]
-        );
-        
-        // Si no hay coincidencias, retornamos null para filtrar después
-        if (newRelatedItems.length === 0) {
-          return null;
-        }
-        
-        // Preservar datos relacionados existentes
-        const result = { ...primary };
-        
-        // Si ya existe un campo 'related', preservarlo con un nombre único
-        if (primary.related && Array.isArray(primary.related)) {
-          if (relatedField === 'related') {
-            // Generar un nombre único para el nuevo campo relacionado
-            let newFieldName = 'related2';
-            let counter = 2;
-            
-            while (result[newFieldName]) {
-              newFieldName = `related${counter++}`;
-            }
-            
-            result[newFieldName] = newRelatedItems;
-          } else {
-            // Usar el nombre personalizado proporcionado
-            result[relatedField] = newRelatedItems;
-          }
-        } else {
-          // Si no hay datos relacionados previos, usar 'related'
-          result.related = newRelatedItems;
-        }
-        
-        return result;
-      })
-      .filter(item => item !== null); // Eliminar todos los null (registros sin coincidencias)
+  // PERF-002: índice por foreignKey → O(n+m) en lugar de O(n×m)
+  const foreignIndex = new Map();
+  for (const foreign of foreignData) {
+    const key = String(foreign[foreignKey]);
+    let bucket = foreignIndex.get(key);
+    if (!bucket) {
+      bucket = [];
+      foreignIndex.set(key, bucket);
+    }
+    bucket.push(foreign);
   }
+
+  const joined = [];
+  for (const primary of primaryData) {
+    const newRelatedItems = foreignIndex.get(String(primary[primaryKey]));
+    if (!newRelatedItems || newRelatedItems.length === 0) {
+      continue;
+    }
+
+    const result = { ...primary };
+
+    if (primary.related && Array.isArray(primary.related)) {
+      if (relatedField === 'related') {
+        let newFieldName = 'related2';
+        let counter = 2;
+        while (result[newFieldName]) {
+          newFieldName = `related${counter++}`;
+        }
+        result[newFieldName] = newRelatedItems;
+      } else {
+        result[relatedField] = newRelatedItems;
+      }
+    } else {
+      result.related = newRelatedItems;
+    }
+
+    joined.push(result);
+  }
+
+  return joined;
+}
 
 /**
  * Limpia y procesa datos geográficos, filtrando según criterios específicos
@@ -150,8 +237,8 @@ function cleanGeographicData(data) {
       if (!item.related || item.related.length === 0) {
         return false;
       }
-      const personaInfo = item.related[0];    
-      const traSim = personaInfo.es_tra_sim === false;
+      const personaInfo = item.related[0];
+      const traSim = isUserEntity(personaInfo.es_tra_sim);
         
       // Verificar que dir_lat y dir_lon no sean 0
       const validCoordinates = 
@@ -164,7 +251,7 @@ function cleanGeographicData(data) {
 
         // Solo incluir elementos que tengan:
         // 1. Coordenadas válidas (no cero)
-        // 2. es_tra_sim = false
+        // 2. es_tra_sim = false (usuario, no trabajadora)
         return validCoordinates && traSim;
       })
     .map(item => {
@@ -192,14 +279,14 @@ function cleanWorkersData(data) {
     // Agrupar los datos por ent_rel
     const workerGroups = {};
     data.forEach(item => {
-      const entRel = item.ent_rel;
+      const entRel = String(item.ent_rel);
       // Si no tenemos info del trabajador todavía o no es válida
       if (!workerGroups[entRel]) {
         if (item.relatedWorker && item.relatedWorker.length > 0) {
           const workerInfo = item.relatedWorker[0];
-          if (workerInfo.es_tra_sim === true /*&& (item.rel_tip == 2 || item.rel_tip == 14)*/) {
+          if (isTraSim(workerInfo.es_tra_sim) /*&& (item.rel_tip == 2 || item.rel_tip == 14)*/) {
             workerGroups[entRel] = {
-              id: entRel,
+              id: item.ent_rel,
               name: workerInfo.name,
               ape_1: workerInfo.ape_1,
               ape_2: workerInfo.ape_2,
@@ -213,9 +300,8 @@ function cleanWorkersData(data) {
       }
       
       if (workerGroups[entRel]) {
-        // Añadir la entidad relacionada sin información duplicada
-        // Solo incluir entidades con off = false y rel_tip 2 o 14 (tipo de relación a domicilio)
-        if (item.off === false /*&& (item.rel_tip == 2 || item.rel_tip == 14)*/) {
+        // Solo incluir entidades con relación activa (off false/0)
+        if (isRelationActive(item.off) /*&& (item.rel_tip == 2 || item.rel_tip == 14)*/) {
             workerGroups[entRel].entidades.push({
                 ent: item.ent,
                 off: item.off,
@@ -239,12 +325,12 @@ function enrichWorkerData(trabajadores, geoUsers) {
     const geoUserMap = {};
     if (Array.isArray(geoUsers)) {
       geoUsers.forEach(user => {
-        if (user && user.id) {
-          geoUserMap[user.id] = user;
+        if (user && user.id !== undefined && user.id !== null) {
+          geoUserMap[String(user.id)] = user;
         }
       });
-    } else if (geoUsers && typeof geoUsers === 'object' && geoUsers.id) {
-      geoUserMap[geoUsers.id] = geoUsers;
+    } else if (geoUsers && typeof geoUsers === 'object' && geoUsers.id !== undefined) {
+      geoUserMap[String(geoUsers.id)] = geoUsers;
     } else {
       console.warn('geoUsers no tiene el formato esperado:', geoUsers);
     }
@@ -252,7 +338,7 @@ function enrichWorkerData(trabajadores, geoUsers) {
     // Para cada trabajador, enriquecer sus entidades con datos geográficos
     return trabajadores.map(trabajador => {
       const entidadesEnriquecidas = trabajador.entidades.map(entidad => {
-        const geoUser = geoUserMap[entidad.ent];
+        const geoUser = geoUserMap[String(entidad.ent)];
         
         if (geoUser) {
           return {
@@ -283,19 +369,61 @@ function enrichWorkerData(trabajadores, geoUsers) {
  * @returns {Array} Lista de municipios que ofrecen los servicios de promoción de la autonomía personal en domicilio y asistencia personal
  */ 
 function filterMunicipalitiesByService(mun_m, tip_ser) {
-  const interestServices = ['4', '6'];
-  const homeServiceMunicipalities = tip_ser
-    .filter(service => interestServices.includes(service.ser_nom))
-    .map(service => service.mun_m); 
+  const interestServices = new Set(['4', '6']);
+  const homeServiceMunicipalityIds = new Set(
+    tip_ser
+      .filter(service => interestServices.has(String(service.ser_nom)))
+      .map(service => String(service.mun_m))
+  );
 
-  return mun_m
-    .filter(municipality => homeServiceMunicipalities.includes(municipality.id))
+  const filtered = mun_m
+    .filter(municipality => homeServiceMunicipalityIds.has(String(municipality.id)))
     .map(municipality => ({
       id: municipality.id,
       name: municipality.name,
       pre_cps: municipality.pre_cps,
       cod_num: municipality.cod_num
     }));
+
+  console.log(
+    `Filtro municipios: tip_ser=${tip_ser.length}, mun_m=${mun_m.length}, ` +
+    `con_servicio_4_6=${homeServiceMunicipalityIds.size}, resultado=${filtered.length}`
+  );
+  if (filtered.length === 0 && tip_ser.length > 0) {
+    const sampleSerNom = [...new Set(tip_ser.slice(0, 50).map(s => `${typeof s.ser_nom}:${s.ser_nom}`))];
+    console.warn('Ningún municipio tras filtro. Muestra ser_nom:', sampleSerNom.join(', '));
+  }
+
+  return filtered;
+}
+
+/**
+ * Fallback cuando mun_m no es accesible con la API key:
+ * deriva IDs de municipio desde ate_m de entidades con servicios 4/6.
+ */
+function buildMunicipalitiesFallback(tip_ser, ate_m) {
+  const interestServices = new Set(['4', '6']);
+  const entityIds = new Set(
+    tip_ser
+      .filter(service => interestServices.has(String(service.ser_nom)))
+      .map(service => String(service.ent_m))
+  );
+  const munIds = new Set();
+  for (const ate of ate_m) {
+    if (entityIds.has(String(ate.id)) && ate.mun_m && Number(ate.mun_m) !== 0) {
+      munIds.add(String(ate.mun_m));
+    }
+  }
+  const fallback = [...munIds]
+    .sort((a, b) => Number(a) - Number(b))
+    .map(id => ({
+      id,
+      name: `Municipio ${id}`,
+      pre_cps: '',
+      cod_num: id
+    }));
+  console.warn(`Fallback municipios desde ate_m: ${fallback.length} ids`);
+  return fallback;
 }
 
 /**
@@ -305,12 +433,20 @@ function filterMunicipalitiesByService(mun_m, tip_ser) {
  * @returns {Array} Lista de IDs de usuarios filtrados por municipio
  */
 function filterEntitiesByMunicipality(tip_ser, municipalities_available) {
-  const interestServices = ['4', '6'];
+  const interestServices = new Set(['4', '6']);
+  const municipalityIds = new Set(municipalities_available.map(muni => String(muni.id)));
+  // tip_ser puede no exponer mun_m con esta API key; en ese caso filtramos solo por servicio
+  const hasMunOnTipSer = tip_ser.some(s => s.mun_m !== undefined && s.mun_m !== null && s.mun_m !== '');
   return tip_ser
-    .filter(service =>
-      municipalities_available.some(muni => muni.id === service.mun_m) &&
-      interestServices.includes(service.ser_nom)
-    )
+    .filter(service => {
+      if (!interestServices.has(String(service.ser_nom))) {
+        return false;
+      }
+      if (!hasMunOnTipSer) {
+        return true;
+      }
+      return municipalityIds.has(String(service.mun_m));
+    })
     .map(service => ({ent_m: service.ent_m}));
 }
 
@@ -324,17 +460,16 @@ function getAvailableWorkers(ent_m, tra_m) {
   // Crear un mapa rápido de tra_m por id
   const traMap = {};
   tra_m.forEach(t => {
-    traMap[t.id] = t;
+    traMap[String(t.id)] = t;
   });
 
   return ent_m
     .filter(worker => {
-      const esTraSim = worker.es_tra_sim === true;
-      const tra = traMap[worker.id];
-      return esTraSim && tra && Number(tra.hor_spapd) > 0;
+      const tra = traMap[String(worker.id)];
+      return isTraSim(worker.es_tra_sim) && tra && Number(tra.hor_spapd) > 0;
     })
     .map(worker => {
-      const tra = traMap[worker.id];
+      const tra = traMap[String(worker.id)];
       // Calcula la disponibilidad
       const tot = Number(tra.tot_hor_con) || 0;
       const spapd = Number(tra.hor_spapd) || 0;
@@ -352,26 +487,42 @@ function getAvailableWorkers(ent_m, tra_m) {
 
 const dataCache = new NodeCache({ stdTTL: 3600 }); // Caché de 1 hora
 
+/**
+ * PERF-001: promesa in-flight compartida (single-flight).
+ * Evita que N peticiones concurrentes con caché fría disparen N× fetchAllData().
+ */
+let processedDataInFlight = null;
 
-// Modificar getProcessedData para usar caché ---------------------------------------------------------------------------------------------------------------------------
-async function getProcessedData() {
-  // Verificar si los datos ya están en caché
-  const cachedData = dataCache.get('processed_data');
-  if (cachedData) {
-    console.log('Usando datos de caché');
-    return cachedData;
+async function loadAndCacheProcessedData() {
+  console.log('cache=miss Iniciando carga y procesamiento de datos Velneo');
+  const fetchStarted = Date.now();
+  let datasets;
+  try {
+    datasets = await fetchAllData();
+  } catch (error) {
+    console.error('cache=skip Carga Velneo fallida; no se guarda caché:', error.message);
+    throw error;
   }
-
-  // Si no están en caché, obtener y procesar
-  const { ent_m, ate_m, ent_rel_m, tip_ser, mun_m, tra_m } = await fetchAllData();
-  const avilableMunicipalities = filterMunicipalitiesByService(mun_m, tip_ser);
-  const userEntities = filterEntitiesByMunicipality(tip_ser, avilableMunicipalities);
-  const workers = getAvailableWorkers(ent_m, tra_m);
-  const entities = ent_m
-    .filter(
-      (ent => ent.es_tra_sim === false && userEntities.some(user => user.ent_m === ent.id)) ||
-      (ent => ent.es_tra_sim === true && workers.some(worker => worker.id === ent.id))
+  const { ent_m, ate_m, ent_rel_m, tip_ser, mun_m, tra_m } = datasets;
+  const fetchMs = Date.now() - fetchStarted;
+  const processStarted = Date.now();
+  let avilableMunicipalities = filterMunicipalitiesByService(mun_m, tip_ser);
+  if (avilableMunicipalities.length === 0) {
+    console.warn(
+      'Lista de municipios vacía tras filtro (¿API key sin GET en mun_m?). ' +
+      'Usando fallback temporal desde ate_m.'
     );
+    avilableMunicipalities = buildMunicipalitiesFallback(tip_ser, ate_m);
+  }
+  const userEntities = filterEntitiesByMunicipality(tip_ser, avilableMunicipalities);
+  const userEntityIds = new Set(userEntities.map(user => String(user.ent_m)));
+  const workers = getAvailableWorkers(ent_m, tra_m);
+  const workerIds = new Set(workers.map(worker => String(worker.id)));
+  // PERF-003: un solo predicado (antes || entre funciones dejaba solo el primero)
+  const entities = ent_m.filter(ent =>
+    (isUserEntity(ent.es_tra_sim) && userEntityIds.has(String(ent.id))) ||
+    (isTraSim(ent.es_tra_sim) && workerIds.has(String(ent.id)))
+  );
   const geoData = joinData(ate_m, entities, 'id', 'id');
   const availableGeoUsers = cleanGeographicData(geoData);
   const relations = joinData(ent_rel_m, entities, 'ent', 'id');
@@ -385,14 +536,55 @@ async function getProcessedData() {
   const groupedWorkers = cleanWorkersData(relationsWithWorker);
   const finalData = enrichWorkerData(groupedWorkers, availableGeoUsers);
 
-  const result = { 
+  const entidadesConMun = finalData.reduce(
+    (acc, w) => acc + w.entidades.filter(e => e.mun_m !== undefined && e.mun_m !== null && e.mun_m !== '').length,
+    0
+  );
+  const entidadesSinMun = finalData.reduce(
+    (acc, w) => acc + w.entidades.filter(e => e.mun_m === undefined || e.mun_m === null || e.mun_m === '').length,
+    0
+  );
+  console.log(
+    `Pipeline: userEntities=${userEntities.length}, workers=${workers.length}, entities=${entities.length}, ` +
+    `geoUsers=${availableGeoUsers.length}, finalData=${finalData.length}, ` +
+    `entidades_con_mun_m=${entidadesConMun}, entidades_sin_mun_m=${entidadesSinMun}, ` +
+    `fetch_ms=${fetchMs}, process_ms=${Date.now() - processStarted}`
+  );
+
+  const result = {
     finalData,
     avilableMunicipalities
   };
-  // Guardar en caché
   dataCache.set('processed_data', result);
-  
+  // PERF-005: mantener caché ligera de municipios alineada con el pipeline completo
+  dataCache.set('municipalities', avilableMunicipalities.map(muni => ({
+    id: muni.id,
+    name: muni.name,
+    pre_cps: muni.pre_cps,
+    cod_num: muni.cod_num
+  })));
+  console.log('cache=set Datos procesados guardados en caché');
   return result;
+}
+
+async function getProcessedData() {
+  const cachedData = dataCache.get('processed_data');
+  if (cachedData) {
+    console.log('cache=hit Usando datos de caché');
+    return cachedData;
+  }
+
+  if (processedDataInFlight) {
+    console.log('cache=wait Esperando carga Velneo ya en curso');
+    return processedDataInFlight;
+  }
+
+  processedDataInFlight = loadAndCacheProcessedData()
+    .finally(() => {
+      processedDataInFlight = null;
+    });
+
+  return processedDataInFlight;
 }
 
 /**
@@ -489,7 +681,7 @@ async function getWorkers() {
 async function getWorkersByID(ids) {
   try {
     const data = await getProcessedData();
-    const workers = data.finalData.filter(worker => ids.includes(worker.id.toString())).map(worker => ({
+    const workers = data.finalData.filter(worker => ids.includes(String(worker.id))).map(worker => ({
       id: worker.id,
       name: worker.name,
       ape_1: worker.ape_1,
@@ -506,22 +698,85 @@ async function getWorkersByID(ids) {
 }
 
 /**
+ * PERF-005: carga ligera de municipios (solo mun_m + tip_ser).
+ * Evita el cold start de ~6 tablas al abrir el selector.
+ */
+let municipalitiesInFlight = null;
+
+async function loadMunicipalitiesLight() {
+  console.log('municipalities=miss Carga ligera mun_m + tip_ser');
+  const started = Date.now();
+  const [munSettled, tipSettled] = await Promise.allSettled([
+    fetchData('mun_m', { fields: 'id,name,pre_cps,cod_num' }),
+    fetchData('tip_ser', { fields: 'id,ent_m,mun_m,ser_nom' })
+  ]);
+
+  const mun_m = munSettled.status === 'fulfilled' ? munSettled.value : [];
+  const tip_ser = tipSettled.status === 'fulfilled' ? tipSettled.value : [];
+
+  if (tipSettled.status === 'rejected') {
+    throw new Error(`Carga ligera tip_ser fallida: ${tipSettled.reason?.message || tipSettled.reason}`);
+  }
+  if (tip_ser.length === 0) {
+    throw new Error('Carga ligera tip_ser vacía. No se cachearán municipios.');
+  }
+
+  let list = filterMunicipalitiesByService(mun_m, tip_ser);
+  if (list.length === 0) {
+    console.warn('Carga ligera: filtro vacío; intentando fallback con ate_m');
+    const ate_m = await fetchData('ate_m', { fields: 'id,tip_ser,dir_lon,dir_lat,mun_m' });
+    list = buildMunicipalitiesFallback(tip_ser, ate_m);
+  }
+
+  const municipalities = list.map(muni => ({
+    id: muni.id,
+    name: muni.name,
+    pre_cps: muni.pre_cps,
+    cod_num: muni.cod_num
+  }));
+
+  dataCache.set('municipalities', municipalities);
+  console.log(
+    `municipalities=set count=${municipalities.length} fetch_ms=${Date.now() - started}`
+  );
+  return municipalities;
+}
+
+/**
  * Obtiene todos los municipios disponibles
- * @returns {Array} Lista de todos los municipios
+ * PERF-005: prioriza caché completa o carga ligera; no dispara el pipeline completo.
  */
 async function getMunicipalities() {
   console.log('Obteniendo lista de municipios disponibles');
   try {
-    console.log('Obteniendo lista de municipios');
-    const data = await getProcessedData();
-    const municipalities = data.avilableMunicipalities.map(muni => ({
-      id: muni.id,
-      name: muni.name,
-      pre_cps: muni.pre_cps,
-      cod_num: muni.cod_num
-    }));
-  
-    return municipalities;
+    const fullCached = dataCache.get('processed_data');
+    if (fullCached?.avilableMunicipalities) {
+      console.log('municipalities=hit (desde processed_data)');
+      return fullCached.avilableMunicipalities.map(muni => ({
+        id: muni.id,
+        name: muni.name,
+        pre_cps: muni.pre_cps,
+        cod_num: muni.cod_num
+      }));
+    }
+
+    const lightCached = dataCache.get('municipalities');
+    if (lightCached) {
+      console.log('municipalities=hit (caché ligera)');
+      return lightCached;
+    }
+
+    if (municipalitiesInFlight) {
+      console.log('municipalities=wait');
+      return municipalitiesInFlight;
+    }
+
+    municipalitiesInFlight = loadMunicipalitiesLight()
+      .finally(() => {
+        municipalitiesInFlight = null;
+      });
+
+    return municipalitiesInFlight;
   } catch (error) {
     console.error('Error al obtener municipios:', error.message);
     throw error;
@@ -537,11 +792,15 @@ async function getWorkersByMunicipalities(municipalities) {
   try {
     console.log(`Obteniendo trabajadores para municipios: ${municipalities.join(', ')}`);
     const data = await getProcessedData();
-    // Solo filtra las trabajadoras que tengan al menos una entidad en esos municipios, pero devuelve todas sus entidades
+    const municipalityIds = municipalities.map(m => String(m));
+    // Solo filtra las trabajadoras que tengan al menos una entidad en esos municipios
     const workers = data.finalData
-      .filter(worker => 
-        worker.entidades.some(entidad => 
-          entidad.mun_m && municipalities.includes(entidad.mun_m.toString())
+      .filter(worker =>
+        worker.entidades.some(entidad =>
+          entidad.mun_m !== undefined &&
+          entidad.mun_m !== null &&
+          entidad.mun_m !== '' &&
+          municipalityIds.includes(String(entidad.mun_m))
         )
       )
       .map(worker => ({
@@ -550,7 +809,11 @@ async function getWorkersByMunicipalities(municipalities) {
         ape_1: worker.ape_1,
         ape_2: worker.ape_2,
         cif: worker.cif,
-      }));      
+      }));
+
+    console.log(
+      `trabajadores_filtrados=${workers.length} (finalData=${data.finalData.length}, municipios=${municipalityIds.join(',')})`
+    );
   
     return workers;
   } catch (error) {

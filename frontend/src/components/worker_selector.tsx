@@ -13,28 +13,35 @@ interface WorkerSelectorProps {
   municipalities: string[];
 }
 
+/** PERF-007: evita N peticiones al marcar municipios seguidos */
+const WORKERS_DEBOUNCE_MS = 400;
+
 const WorkerSelector: React.FC<WorkerSelectorProps> = ({ onFilterChange, municipalities }) => {
   const [selectedOptions, setSelectedOptions] = useState<MultiValue<WorkerOption>>([]);
   const [options, setOptions] = useState<WorkerOption[]>([]);
-  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [isLoading, setIsLoading] = useState<boolean>(false);
   const [warning, setWarning] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Cargar los trabajadores desde el backend
+  // Cargar trabajadores con debounce cuando cambian los municipios
   useEffect(() => {
-    const loadWorkers = async () => {
-      if (municipalities.length === 0) {
-        setOptions([]);
-        setSelectedOptions([]);
-        return;
-      }
-
-      console.log('Cargando trabajadores para municipios:', municipalities);
-      setIsLoading(true);
+    if (municipalities.length === 0) {
+      setOptions([]);
+      setSelectedOptions([]);
+      setIsLoading(false);
       setError(null);
+      return;
+    }
 
+    let cancelled = false;
+    setIsLoading(true);
+    setError(null);
+
+    const timer = window.setTimeout(async () => {
+      console.log('Cargando trabajadores para municipios:', municipalities);
       try {
         const workers = await mapsService.getWorkersByMunicipalities(municipalities);
+        if (cancelled) return;
         console.log('Trabajadores filtrados:', workers);
 
         const workerOptions: WorkerOption[] = workers.map(worker => ({
@@ -44,14 +51,21 @@ const WorkerSelector: React.FC<WorkerSelectorProps> = ({ onFilterChange, municip
 
         setOptions(workerOptions);
       } catch (err) {
+        if (cancelled) return;
         console.error('Error al cargar trabajadores:', err);
         setError('Error al cargar la lista de trabajadores');
+        setOptions([]);
       } finally {
-        setIsLoading(false);
+        if (!cancelled) {
+          setIsLoading(false);
+        }
       }
-    };
+    }, WORKERS_DEBOUNCE_MS);
 
-    loadWorkers();
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
   }, [municipalities]);
 
 

@@ -71,6 +71,11 @@ export interface RouteData {
  * Servicio de mapas que proporciona métodos para interactuar con la API del backend
  * y obtener datos geográficos, trabajadores y rutas optimizadas
  */
+
+/** PERF-007: caché en sesión + dedupe de peticiones concurrentes de municipios */
+let municipalitiesCache: Municipality[] | null = null;
+let municipalitiesInFlight: Promise<Municipality[]> | null = null;
+
 export const mapsService = {
   /**
    * Obtiene todos los datos del mapa incluyendo trabajadores y puntos geográficos
@@ -102,11 +107,26 @@ export const mapsService = {
   },
 
   /**
-   * Obtiene la lista de municipios con servicio a domicilio
+   * Obtiene la lista de municipios con servicio a domicilio.
+   * PERF-007: una sola petición por sesión de página (caché en memoria).
    * @returns {Promise<Municipality[]>} Lista de municipios
    */
   async getMunicipalities(): Promise<Municipality[]> {
-    return apiRequest<Municipality[]>('/maps/municipalities');
+    if (municipalitiesCache) {
+      return municipalitiesCache;
+    }
+    if (municipalitiesInFlight) {
+      return municipalitiesInFlight;
+    }
+    municipalitiesInFlight = apiRequest<Municipality[]>('/maps/municipalities')
+      .then((data) => {
+        municipalitiesCache = data;
+        return data;
+      })
+      .finally(() => {
+        municipalitiesInFlight = null;
+      });
+    return municipalitiesInFlight;
   },
 
   /**

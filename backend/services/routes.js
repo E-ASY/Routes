@@ -47,28 +47,31 @@ async function getRouteFromGoogle(origin, destination) {
      * @param {string} travelMode - Modo de transporte ("TRANSIT", "DRIVE", etc.)
      * @returns {Array|null} Coordenadas de la ruta o null si no se encontró
      */
-    const getRoute = async (travelMode) => {
+    const getRoute = async (travelMode, includeRouteModifiers = true) => {
       const requestBody = {
-        origin: { location: { latLng: { latitude: origin.lat, longitude: origin.lon } } },
-        destination: { location: { latLng: { latitude: destination.lat, longitude: destination.lon } } },
+        origin: { location: { latLng: { latitude: Number(origin.lat), longitude: Number(origin.lon) } } },
+        destination: { location: { latLng: { latitude: Number(destination.lat), longitude: Number(destination.lon) } } },
         travelMode: travelMode,
         computeAlternativeRoutes: false,
-        routeModifiers: {
-          avoidTolls: false,
-          avoidHighways: false,
-          avoidFerries: false
-        },
         polylineEncoding: "GEO_JSON_LINESTRING",
         languageCode: "es-ES",
         units: "METRIC"
       };
+      if (includeRouteModifiers && travelMode !== 'TRANSIT') {
+        requestBody.routeModifiers = {
+          avoidTolls: false,
+          avoidHighways: false,
+          avoidFerries: false
+        };
+      }
 
       const response = await axios.post(ROUTE_SERVICE_URL, requestBody, {
         headers: {
           "Content-Type": "application/json",
           "X-Goog-Api-Key": GOOGLE_API_KEY,
           "X-Goog-FieldMask": "routes.polyline"
-        }
+        },
+        timeout: 15000
       });
 
       if (response.data.routes && response.data.routes.length > 0) {
@@ -78,10 +81,17 @@ async function getRouteFromGoogle(origin, destination) {
     };
 
     // Intentar primero con TRANSIT, luego con DRIVE si falla
-    let route = await getRoute("TRANSIT");
+    // Nota: routeModifiers no aplica a TRANSIT y puede provocar 400.
+    let route = null;
+    try {
+      route = await getRoute("TRANSIT", false);
+    } catch (transitError) {
+      const detail = transitError.response?.data?.error?.message || transitError.message;
+      console.warn(`TRANSIT falló (${origin.lat},${origin.lon} → ${destination.lat},${destination.lon}): ${detail}`);
+    }
     if (!route) {
-      console.log(`No se encontró ruta con TRANSIT de ${origin.lat},${origin.lon} a ${destination.lat},${destination.lon}. Intentando con DRIVE...`);
-      route = await getRoute("DRIVE");
+      console.log(`Intentando DRIVE de ${origin.lat},${origin.lon} a ${destination.lat},${destination.lon}...`);
+      route = await getRoute("DRIVE", true);
     }
     // Guardar en caché
     if (route) {
@@ -89,7 +99,8 @@ async function getRouteFromGoogle(origin, destination) {
     }
     return route;
   } catch (error) {
-    console.error(`Error al obtener ruta de Google:`, error.message);
+    const detail = error.response?.data?.error?.message || error.message;
+    console.error(`Error al obtener ruta de Google: ${detail}`);
     return null;
   }
 }

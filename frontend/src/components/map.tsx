@@ -53,14 +53,21 @@ const Map: React.FC<MapProps> = ({ workers }) => {
         pitch: 30
       };
       
-      // Estilo base de MapLibre
-      // Update the map style specification to match what maplibregl expects
+      // Estilo base de MapLibre (CARTO exige API key en raster basemaps)
+      const cartoApiKey = import.meta.env.VITE_CARTO_API_KEY;
+      if (!cartoApiKey) {
+        console.warn('Falta VITE_CARTO_API_KEY en frontend/.env.local');
+      }
+      const cartoTileUrl = cartoApiKey
+        ? `https://basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png?key=${cartoApiKey}`
+        : 'https://basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png';
+
       const MAPLIBRE_STYLE: maplibregl.StyleSpecification = {
         version: 8,
         sources: {
           'carto-voyager': {
             type: 'raster',
-            tiles: ['https://basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png'],
+            tiles: [cartoTileUrl],
             tileSize: 256,
             attribution: '© CARTO, © OpenStreetMap contributors'
           }

@@ -14,12 +14,54 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 5000;
 
+/**
+ * SEC-001: sin SESSION_SECRET no arrancar (evita secreto por defecto predecible).
+ */
+const SESSION_SECRET = process.env.SESSION_SECRET;
+if (!SESSION_SECRET) {
+  console.error('Falta SESSION_SECRET. Define la variable de entorno antes de arrancar.');
+  process.exit(1);
+}
+
+/**
+ * Orígenes permitidos para CORS y redirecciones post-login (SEC-003 / base SEC-013).
+ */
+const ALLOWED_ORIGINS = [
+  'http://localhost:5173',
+  'http://localhost:5000',
+  'https://acufade-routes.vercel.app',
+  process.env.FRONTEND_URL
+].filter(Boolean);
+
+/**
+ * Valida que una URL de retorno pertenezca a la allowlist de orígenes.
+ * @param {unknown} candidate
+ * @returns {string|null}
+ */
+function getSafeReturnTo(candidate) {
+  const fallback = process.env.FRONTEND_URL || 'http://localhost:5173';
+  if (typeof candidate !== 'string' || !candidate.trim()) {
+    return fallback;
+  }
+  try {
+    const url = new URL(candidate);
+    const origin = url.origin;
+    if (ALLOWED_ORIGINS.includes(origin)) {
+      return url.toString();
+    }
+  } catch {
+    // URL inválida → fallback
+  }
+  console.warn('Redirect rechazado (fuera de allowlist):', candidate);
+  return fallback;
+}
+
 app.use(helmet());
 app.use(express.json());
 app.use(cookieParser());
 
 app.use(cors({
-  origin: ['http://localhost:5173', 'http://localhost:5000', 'https://acufade-routes.vercel.app', process.env.FRONTEND_URL],
+  origin: ALLOWED_ORIGINS,
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'Cookie']
@@ -32,7 +74,7 @@ app.use(cors({
  * Utiliza un secreto para firmar cookies y evitar manipulación
  */
 app.use(session({
-  secret: process.env.SESSION_SECRET || 'tu-secreto-super-seguro',
+  secret: SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
   cookie: {
@@ -92,15 +134,14 @@ app.get('/', (req, res) => {
       };
     }
     
-    // Obtener la URL de redirección del parámetro state o de la sesión
-    const returnTo = req.session.returnTo || req.query.state || process.env.FRONTEND_URL;
-    // Limpiar la sesión
+    // SEC-003: no usar req.query.state como URL (en OAuth, state es anti-CSRF).
+    // Solo session.returnTo o FRONTEND_URL, validados contra allowlist.
+    const returnTo = getSafeReturnTo(req.session.returnTo);
     delete req.session.returnTo;
-    // Redireccionar al frontend
     return res.redirect(returnTo);
   } catch (error) {
     console.error('Error en callback:', error);
-    res.redirect('http://localhost:5173/error');
+    res.redirect(getSafeReturnTo(`${process.env.FRONTEND_URL || 'http://localhost:5173'}/error`));
   }
 });
 
