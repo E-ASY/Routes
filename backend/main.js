@@ -1,12 +1,12 @@
 /**
  * Punto de entrada del API ACUFADE Routes.
  * SEC-019: config valida env antes de montar Express.
+ * SEC-014: solo sesión de express-openid-connect (sin express-session).
  */
 const { config } = require('./config');
 
 const express = require('express');
 const cors = require('cors');
-const session = require('express-session');
 const cookieParser = require('cookie-parser');
 const helmet = require('helmet');
 const mapRoutes = require('./routes/map');
@@ -57,18 +57,10 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization', 'Cookie']
 }));
 
-app.use(session({
-  secret: config.sessionSecret,
-  resave: false,
-  saveUninitialized: false,
-  cookie: {
-    secure: config.isProduction,
-    httpOnly: true,
-    sameSite: config.isProduction ? 'None' : 'Lax',
-    maxAge: 24 * 60 * 60 * 1000
-  }
-}));
-
+/**
+ * Auth0 OIDC — única sesión de aplicación (cookie appSession).
+ * Login: GET /login?returnTo=... (gestionada por el middleware).
+ */
 const authConfig = {
   authRequired: false,
   auth0Logout: true,
@@ -76,6 +68,11 @@ const authConfig = {
   baseURL: config.auth0BaseUrl,
   clientID: config.auth0ClientId,
   issuerBaseURL: config.auth0IssuerBaseUrl,
+  routes: {
+    login: '/login',
+    logout: '/logout',
+    callback: '/callback',
+  },
   session: {
     cookie: {
       secure: config.isProduction,
@@ -114,24 +111,15 @@ app.use('/maps', (req, res, next) => {
 });
 app.use('/maps', requiresAuth(), mapRoutes);
 
+/**
+ * Raíz: si Auth0/OIDC deja al usuario en baseURL, redirigir al frontend.
+ * El returnTo post-login lo gestiona express-openid-connect (/login?returnTo=).
+ */
 app.get('/', (req, res) => {
   try {
-    const isAuthenticated = req.oidc.isAuthenticated();
-    if (isAuthenticated && req.oidc.user) {
-      const { user } = req.oidc;
-      // SEC-010: no persistir id_token en express-session.
-      delete req.session.id_token;
-      req.session.user = {
-        name: user.name,
-        email: user.email,
-      };
-    }
-
-    const returnTo = getSafeReturnTo(req.session.returnTo);
-    delete req.session.returnTo;
-    return res.redirect(returnTo);
+    return res.redirect(getSafeReturnTo(config.frontendUrl));
   } catch (error) {
-    console.error('Error en callback:', error);
+    console.error('Error en redirect /:', error);
     res.redirect(getSafeReturnTo(`${config.frontendUrl}/error`));
   }
 });

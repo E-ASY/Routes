@@ -243,10 +243,10 @@ function prepareRoutePoints(points) {
   return routeRequests;
 }
 
-async function getRoutesForWorkers(workers) {
+async function getRoutesForWorkers(workers, options = {}) {
   try {
     if (!workers || workers.length === 0) {
-      return [];
+      return { routes: [], workers: {}, total: 0 };
     }
 
     const cachedWorkers = [];
@@ -280,7 +280,13 @@ async function getRoutesForWorkers(workers) {
     }
 
     logger.info(`Obteniendo rutas workers_to_fetch=${workersToFetch.length}`);
-    const pointsData = await getPointsForWorkers(workersToFetch);
+    const fetchSet = new Set(workersToFetch.map(String));
+    let pointsData;
+    if (Array.isArray(options.points)) {
+      pointsData = options.points.filter((p) => fetchSet.has(String(p.id)));
+    } else {
+      pointsData = await getPointsForWorkers(workersToFetch);
+    }
     if (!pointsData || pointsData.length === 0) {
       logger.info('No se encontraron puntos para los trabajadores solicitados');
       return {

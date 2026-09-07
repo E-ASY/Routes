@@ -17,7 +17,6 @@ function clientKey(req) {
   const user =
     req.oidc?.user?.sub ||
     req.oidc?.user?.email ||
-    req.session?.user?.email ||
     'anon';
   const ipPart = req.ip ? ipKeyGenerator(req.ip) : 'unknown';
   return `${ipPart}:${user}`;

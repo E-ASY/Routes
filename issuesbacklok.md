@@ -4,7 +4,7 @@
 **Rama de trabajo:** `routes/fix`  
 **Fecha de auditoría:** 2026-09-07  
 **Alcance:** backend Express/Auth0, frontend React/Vite, consultas a Velneo y Google Routes.  
-**Última actualización de trabajo:** 2026-09-07 (Fase 2: PERF-009)
+**Última actualización de trabajo:** 2026-09-07 (SEC-004 deferred; SEC-014)
 
 ## Registro de avances
 
@@ -36,6 +36,13 @@
 | 2026-09-07 | SEC-022 | Logger por niveles; sin IDs/coords/PII en logs info; frontend sin dump en prod | `backend/utils/logger.js`, services, map routes, frontend | `LOG_LEVEL` / `DEBUG_ACUFADE_DATA` |
 | 2026-09-07 | SEC-019 | Fail-fast env + `.env.example`; `config.js` centraliza secretos Auth0/sesión | `backend/config.js`, `main.js`, `.env.example` | `AUTH0_SECRET` opcional (avance SEC-015) |
 | 2026-09-07 | PERF-009 | `/health` + logs `event=` (duration_ms, cache, velneo_pages, google_routes) | `observability.js`, `data.js`, `routes.js`, `main.js` | Sin auth en `/health` |
+| 2026-09-07 | PERF-006 | `GET /maps/viewport` (workers+points+routes); UI 1 request al seleccionar | `viewport.js`, `map.js`, `main.tsx`, Map, Legend | Reusa points en Google Routes |
+| 2026-09-07 | SEC-023 + SEC-020 | Eliminados deps huérfanas FE; `npm audit --omit=dev --audit-level=high` → 0 | `frontend/package.json`, lockfile | Quitados auth0-react, carto, react-map-gl, polyline; añadido `@deck.gl/layers` |
+| 2026-09-07 | SEC-015 | `AUTH0_SECRET` obligatorio; sin fallback a client secret | `backend/config.js`, `.env.example` | Rotación OIDC independiente de OAuth |
+| 2026-09-07 | SEC-013 | CORS/redirects vía `ALLOWED_ORIGINS` + `FRONTEND_URL`; sin localhost en prod | `backend/config.js`, `.env.example` | Defaults localhost solo en development |
+| 2026-09-07 | SEC-017 | Validación Zod de workers/municipalities + tests `node --test` | `utils/queryParams.js`, `tests/queryParams.test.js` | `npm test` → 8 pass |
+| 2026-09-07 | SEC-004 | Diferido: sin RBAC/roles en desarrollo | `issuesbacklok.md` | Retomar al definir scopes en Auth0 tenant |
+| 2026-09-07 | SEC-014 | Eliminado `express-session`; solo cookie OIDC (`AUTH0_SECRET`) | `main.js`, `config.js`, `rateLimit.js` | `SESSION_SECRET` ya no es obligatorio; returnTo vía `/login?returnTo=` |
 
 ### Verificación realizada / pendiente
 
@@ -76,7 +83,7 @@
 | SEC-001 | P0 | Eliminar fallback de `SESSION_SECRET` | Seguridad | done (código) |
 | SEC-002 | P0 | Dejar de loguear API key de Velneo y rotarla | Seguridad | in_progress (falta rotar clave) |
 | SEC-003 | P0 | Cerrar open redirect en `GET /` | Seguridad | done (código) |
-| SEC-004 | P1 | RBAC / scopes Auth0 en `/maps/*` | Seguridad | open |
+| SEC-004 | P1 | RBAC / scopes Auth0 en `/maps/*` | Seguridad | deferred (dev: sin roles por ahora) |
 | SEC-005 | P1 | Restringir o eliminar `GET /maps/data` | Seguridad | done (código) |
 | SEC-006 | P1 | Errores genéricos en producción | Seguridad | done (código) |
 | SEC-007 | P1 | Rate limiting en endpoints costosos | Seguridad | done (código) |
@@ -85,23 +92,23 @@
 | SEC-010 | P1 | No almacenar `id_token` en sesión sin uso | Seguridad | done (código) |
 | SEC-011 | P1 | Actualizar dependencias vulnerables (backend) | Seguridad | done (código) |
 | SEC-012 | P2 | API key Velneo fuera del query string | Seguridad | open |
-| SEC-013 | P2 | CORS dinámico por entorno | Seguridad | open (avance parcial vía ALLOWED_ORIGINS) |
-| SEC-014 | P2 | Unificar sistema de sesiones | Seguridad | open |
-| SEC-015 | P2 | Secreto OIDC separado del client secret | Seguridad | open |
+| SEC-013 | P2 | CORS dinámico por entorno | Seguridad | done (código) |
+| SEC-014 | P2 | Unificar sistema de sesiones | Seguridad | done (código) |
+| SEC-015 | P2 | Secreto OIDC separado del client secret | Seguridad | done (código) |
 | SEC-016 | P2 | Caché de rutas con TTL / LRU | Seguridad + Perf | done (código) |
-| SEC-017 | P2 | Validación de entrada con schema | Seguridad | open |
+| SEC-017 | P2 | Validación de entrada con schema | Seguridad | done (código) |
 | SEC-018 | P2 | DTO mínimo en `/auth/check` | Seguridad | done (código) |
 | SEC-019 | P2 | Fail-fast de variables de entorno | Seguridad | done (código) |
-| SEC-020 | P2 | Auditar / actualizar dependencias frontend | Seguridad | open |
+| SEC-020 | P2 | Auditar / actualizar dependencias frontend | Seguridad | done (código) |
 | SEC-021 | P3 | Logout CSRF (GET) | Seguridad | open |
 | SEC-022 | P2 | Eliminar logs verbosos con PII | Seguridad | done (código) |
-| SEC-023 | P2 | Eliminar dependencias no usadas | Seguridad | in_progress (backend done) |
+| SEC-023 | P2 | Eliminar dependencias no usadas | Seguridad | done (código) |
 | PERF-001 | P1 | Single-flight / anti cache stampede | Rendimiento | done (código) |
 | PERF-002 | P1 | Joins e índices O(n+m) con `Map`/`Set` | Rendimiento | done (código) |
 | PERF-003 | P1 | Corregir filtro lógico de `entities` | Correctitud | done (código) |
 | PERF-004 | P1 | Paginación Velneo: `push`, page size, retry | Rendimiento | done (código) |
 | PERF-005 | P2 | Cold start ligero para municipios | Rendimiento | done (código) |
-| PERF-006 | P2 | Endpoint agregado / menos round-trips UI | Rendimiento | open |
+| PERF-006 | P2 | Endpoint agregado / menos round-trips UI | Rendimiento | done (código) |
 | PERF-007 | P2 | Caché cliente + debounce selectores | Rendimiento | done (código) |
 | PERF-008 | P2 | Google Routes: timeout, backoff, cuota | Rendimiento | done (código) |
 | PERF-009 | P2 | Baseline y observabilidad mínima | Rendimiento | done (código) |
@@ -153,10 +160,11 @@
 
 | Campo | Detalle |
 |-------|---------|
-| **Estado** | open |
-| **Evidencia** | [`backend/main.js:73`](backend/main.js) solo `requiresAuth()`; `AUTH0_AUDIENCE` documentado en README pero no usado |
+| **Estado** | deferred — 2026-09-07 (desarrollo: no se asignan roles/tenant aún) |
+| **Evidencia** | [`backend/main.js`](backend/main.js) solo `requiresAuth()`; `AUTH0_AUDIENCE` no usado |
 | **Impacto** | Cualquier usuario Auth0 del tenant accede a PII (CIF, coordenadas, nombres). |
 | **Solución** | Roles/scopes (p.ej. `routes:read`). Middleware 403 sin scope. Restringir login a usuarios corporativos. |
+| **Pendiente** | Configurar API/scopes en Auth0 + middleware cuando se definan roles de acceso. |
 | **Dependencias** | Configuración Auth0 tenant (fuera de repo) |
 | **Criterio de aceptación** | Usuario sin rol/scope recibe **403** en `/maps/*`. Test con token sin permiso. |
 
@@ -252,10 +260,10 @@
 
 | Campo | Detalle |
 |-------|---------|
-| **Estado** | open |
-| **Evidencia** | [`backend/main.js:21-26`](backend/main.js) — localhost + Vercel hardcodeado + `FRONTEND_URL` |
-| **Impacto** | Orígenes de otros entornos; `undefined` en array. |
-| **Solución** | Función `origin` con allowlist desde env (lista separada por comas). Sin localhost en prod. |
+| **Estado** | done (código) — 2026-09-07 |
+| **Evidencia** | `resolveAllowedOrigins()` en `backend/config.js` |
+| **Impacto** | Orígenes de otros entornos; localhost en prod. |
+| **Solución aplicada** | `ALLOWED_ORIGINS` coma-separados + siempre `FRONTEND_URL`; localhost solo si development y lista vacía. |
 | **Dependencias** | SEC-003 |
 | **Criterio de aceptación** | Origen no listado → sin `Access-Control-Allow-Origin`. |
 
@@ -263,23 +271,23 @@
 
 | Campo | Detalle |
 |-------|---------|
-| **Estado** | open |
-| **Evidencia** | `express-session` + sesión OIDC en [`backend/main.js`](backend/main.js) |
+| **Estado** | done (código) — 2026-09-07 |
+| **Evidencia** | Sin `express-session`; solo `express-openid-connect` (`appSession` + `AUTH0_SECRET`) |
 | **Impacto** | Dos cookies/secretos; misconfiguración. |
-| **Solución** | Preferir solo sesión de `express-openid-connect` si no hace falta `express-session`. |
+| **Solución aplicada** | Quitado `express-session`; `/` redirige a frontend; login usa `/login?returnTo=` del middleware OIDC. |
 | **Dependencias** | SEC-010 |
-| **Criterio de aceptación** | Una cookie de sesión documentada; login/logout verificados. |
+| **Criterio de aceptación** | Una cookie de sesión OIDC; `SESSION_SECRET` no requerido. |
 
 ## SEC-015 — Secreto OIDC separado del client secret (P2)
 
 | Campo | Detalle |
 |-------|---------|
-| **Estado** | open |
-| **Evidencia** | [`backend/main.js:54`](backend/main.js) — `secret: AUTH0_CLIENT_SECRET` |
+| **Estado** | done (código) — 2026-09-07 |
+| **Evidencia** | `AUTH0_SECRET` en `REQUIRED`; `config.auth0Secret` sin fallback |
 | **Impacto** | Acopla compromiso de cookies y client secret OAuth. |
-| **Solución** | `APP_SESSION_SECRET` dedicado documentado en `.env.example`. |
+| **Solución aplicada** | Variable dedicada; rotación independiente documentada en `.env.example`. |
 | **Dependencias** | SEC-019 |
-| **Criterio de aceptación** | Variables separadas; rotación independiente documentada. |
+| **Criterio de aceptación** | Variables separadas; arranque falla si falta `AUTH0_SECRET`. |
 
 ## SEC-016 — Caché de rutas con TTL / LRU (P2)
 
@@ -296,12 +304,12 @@
 
 | Campo | Detalle |
 |-------|---------|
-| **Estado** | open |
-| **Evidencia** | [`backend/routes/map.js:35-42,88-98,122-126`](backend/routes/map.js) |
+| **Estado** | done (código) — 2026-09-07 |
+| **Evidencia** | Zod en `backend/utils/queryParams.js`; tests en `backend/tests/queryParams.test.js` |
 | **Impacto** | Payloads oversized; IDs inválidos que disparan trabajo costoso. |
-| **Solución** | Zod/Joi: tipo, longitud, max items, regex. |
+| **Solución aplicada** | Schemas Zod (max items, regex ID, required); API `parseWorkers`/`parseMunicipalities` sin cambio de contrato. |
 | **Dependencias** | SEC-008 |
-| **Criterio de aceptación** | Input inválido → **400**. Tests unitarios de schema. |
+| **Criterio de aceptación** | Input inválido → **400**. `npm test` pasa. |
 
 ## SEC-018 — DTO mínimo en `/auth/check` (P2)
 
@@ -329,12 +337,12 @@
 
 | Campo | Detalle |
 |-------|---------|
-| **Estado** | open |
-| **Evidencia** | `npm audit` frontend: 33 vulns (`1 critical`, `18 high`) |
+| **Estado** | done (código) — 2026-09-07 |
+| **Evidencia** | `npm audit --omit=dev --audit-level=high` → 0; también audit completo → 0 |
 | **Impacto** | Principalmente toolchain/build; mantener limpio. |
-| **Solución** | `npm audit fix`, actualizar Vite; CI con audit producción. |
-| **Dependencias** | Ninguna |
-| **Criterio de aceptación** | `npm audit --production --audit-level=high` sin high/critical. |
+| **Solución aplicada** | Quitados paquetes huérfanos + `npm audit fix`; script `npm run audit:high`. |
+| **Dependencias** | SEC-023 |
+| **Criterio de aceptación** | `npm audit --omit=dev --audit-level=high` sin high/critical. |
 
 ## SEC-021 — Logout CSRF vía GET (P3)
 
@@ -362,10 +370,10 @@
 
 | Campo | Detalle |
 |-------|---------|
-| **Estado** | in_progress — backend JWT limpio (2026-09-07); falta frontend `@auth0/auth0-react` |
-| **Evidencia** | Backend: eliminados con SEC-011. Frontend: `@auth0/auth0-react` sin import (pendiente). |
+| **Estado** | done (código) — 2026-09-07 |
+| **Evidencia** | Backend JWT (SEC-011). Frontend: eliminados `@auth0/auth0-react`, `@deck.gl/carto`, `@deck.gl/react`, `@mapbox/polyline`, `react-map-gl`; añadido `@deck.gl/layers` (sí se usa). |
 | **Impacto** | Superficie supply-chain y confusión arquitectónica. |
-| **Solución** | Eliminar paquetes huérfanos. |
+| **Solución aplicada** | Dependencias alineadas con imports reales. |
 | **Dependencias** | Ninguna |
 | **Criterio de aceptación** | Dependencias directas alineadas con imports reales. |
 
@@ -434,12 +442,12 @@
 
 | Campo | Detalle |
 |-------|---------|
-| **Estado** | open |
-| **Evidencia** | [`map.tsx`](frontend/src/components/map.tsx) points+routes; [`legend.tsx`](frontend/src/components/legend.tsx) workers; routes recomputa points |
-| **Impacto** | 3 HTTP + doble `getProcessedData` / recomputo de puntos. |
-| **Solución** | Endpoint `viewport` `{ workers, points, routes }` o compartir datos; paralelizar si se mantienen separados. |
+| **Estado** | done (código) — 2026-09-07 |
+| **Evidencia** | `GET /maps/viewport`; App carga una vez y reparte a Map + Legend |
+| **Impacto** | 3 HTTP + doble recomputo de puntos. |
+| **Solución aplicada** | Viewport `{ workers, points, routes }`; rutas reutilizan points; log `event=viewport_load`. |
 | **Dependencias** | SEC-008 |
-| **Criterio de aceptación** | Seleccionar trabajadores → ≤ **2** requests UI (ideal 1). Backend ≤ 1 carga de datos procesados por operación. |
+| **Criterio de aceptación** | Seleccionar trabajadores → **1** request `/maps/viewport` (más el previo de lista workers por municipio). |
 
 ## PERF-007 — Caché cliente + debounce selectores (P2)
 

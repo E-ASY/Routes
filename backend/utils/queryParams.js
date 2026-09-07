@@ -1,11 +1,19 @@
 /**
- * Validación de query params de /maps (SEC-008).
- * Límites alineados con la UI (12 workers) y margen API (20).
+ * Validación de query params de /maps (SEC-008 + SEC-017).
+ * Schemas Zod: tipo, longitud, max items, regex de ID.
  */
+const { z } = require('zod');
+
 const MAX_WORKERS = Number(process.env.MAX_WORKERS || 20);
 const MAX_MUNICIPALITIES = Number(process.env.MAX_MUNICIPALITIES || 50);
-/** IDs Velneo tipados: numéricos o alfanuméricos cortos. */
-const ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+
+/** IDs Velneo tipados: alfanuméricos cortos. */
+const idSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(64)
+  .regex(/^[A-Za-z0-9_-]+$/, 'ID inválido');
 
 /**
  * @param {unknown} value
@@ -19,40 +27,49 @@ function normalizeQueryList(value) {
 }
 
 /**
- * Parsea y valida una lista de IDs desde query string.
+ * @param {number} max
+ * @param {boolean} required
+ */
+function idListSchema(max, required) {
+  let schema = z.array(idSchema).max(max, `Máximo ${max} valores permitidos`);
+  if (required) {
+    schema = schema.min(1, 'Se requiere al menos un ID');
+  }
+  return schema.transform((ids) => [...new Set(ids)]);
+}
+
+/**
+ * Parsea y valida una lista de IDs desde query string con Zod.
  * @param {unknown} value
  * @param {{ name: string, max: number, required?: boolean }} options
  * @returns {{ ok: true, ids: string[] } | { ok: false, status: number, error: string }}
  */
 function parseIdList(value, { name, max, required = false }) {
   const raw = normalizeQueryList(value);
+  const result = idListSchema(max, required).safeParse(raw);
 
-  if (required && raw.length === 0) {
-    return { ok: false, status: 400, error: `Se requiere el parámetro ${name}` };
-  }
-
-  if (raw.length > max) {
-    return {
-      ok: false,
-      status: 400,
-      error: `Máximo ${max} valores permitidos para ${name}`,
-    };
-  }
-
-  const ids = [];
-  for (const item of raw) {
-    const id = String(item).trim();
-    if (!ID_PATTERN.test(id)) {
-      return {
-        ok: false,
-        status: 400,
-        error: `Valor inválido en ${name}`,
-      };
+  if (!result.success) {
+    const first = result.error.issues[0];
+    let error = `Valor inválido en ${name}`;
+    if (first) {
+      if (first.code === 'too_big') {
+        error = `Máximo ${max} valores permitidos para ${name}`;
+      } else if (first.code === 'too_small' && required) {
+        error = `Se requiere el parámetro ${name}`;
+      } else if (first.message && first.message !== 'Invalid') {
+        error = first.path.length
+          ? `Valor inválido en ${name}`
+          : first.message.includes('Máximo')
+            ? `Máximo ${max} valores permitidos para ${name}`
+            : first.message.includes('al menos')
+              ? `Se requiere el parámetro ${name}`
+              : `Valor inválido en ${name}`;
+      }
     }
-    ids.push(id);
+    return { ok: false, status: 400, error };
   }
 
-  return { ok: true, ids: [...new Set(ids)] };
+  return { ok: true, ids: result.data };
 }
 
 /**
@@ -82,7 +99,9 @@ function parseMunicipalities(value, opts = {}) {
 module.exports = {
   MAX_WORKERS,
   MAX_MUNICIPALITIES,
+  idSchema,
   parseWorkers,
   parseMunicipalities,
   parseIdList,
+  normalizeQueryList,
 };

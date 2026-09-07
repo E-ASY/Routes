@@ -1,27 +1,14 @@
 import React from 'react';
 import { List, ListItem, ListItemText, ListItemIcon, Paper } from '@mui/material';
 import CircleIcon from '@mui/icons-material/Circle';
-
-import { mapsService } from '../services/map_service';
+import { Worker } from '../services/map_service';
 
 interface LegendProps {
-  workers: string[];
+  workersInfo: Worker[];
 }
 
-const Legend: React.FC<LegendProps> = ({ workers }) => {
-  const [infoWorkers, setInfoWorkers] = React.useState<any[]>([]);
-
-  React.useEffect(() => {
-    if (workers.length > 0) {
-      const fetchWorkers = async () => {
-        const data = await mapsService.getWorkersById(workers);
-        setInfoWorkers(data);
-      };
-      fetchWorkers();
-    }
-  }, [workers]);
-
-  if (workers.length === 0) return null; // Ocultar si no hay trabajadores
+const Legend: React.FC<LegendProps> = ({ workersInfo }) => {
+  if (!workersInfo || workersInfo.length === 0) return null;
 
   const staticColors = [
     '#66C5CC', '#F6CF71', '#F89C74', '#DCB0F2', '#87C55F',
@@ -40,8 +27,8 @@ const Legend: React.FC<LegendProps> = ({ workers }) => {
       className='Legend-container'
     >
       <List>
-        {infoWorkers.map((info, index) => (
-          <ListItem key={index} divider>
+        {workersInfo.map((info, index) => (
+          <ListItem key={String(info.id)} divider>
             <ListItemIcon>
               <CircleIcon sx={{ color: staticColors[index % staticColors.length], fontSize: 20 }} />
             </ListItemIcon>

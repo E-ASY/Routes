@@ -6,7 +6,7 @@
     "start": "node main.js",
     "dev": "nodemon main.js",
     "audit:high": "npm audit --audit-level=high",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node --test tests/**/*.test.js"
   },
   "keywords": [],
   "author": "",
@@ -20,10 +20,10 @@
     "express": "^5.2.1",
     "express-openid-connect": "^2.18.0",
     "express-rate-limit": "^8.7.0",
-    "express-session": "^1.19.0",
     "helmet": "^8.1.0",
     "node-cache": "^5.1.2",
-    "nodemon": "^3.1.0"
+    "nodemon": "^3.1.0",
+    "zod": "^4.5.4"
   },
   "devDependencies": {
     "@types/node": "^22.14.0"

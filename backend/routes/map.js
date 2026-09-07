@@ -7,6 +7,7 @@ const express = require('express');
 const router = express.Router();
 const dataService = require('../services/data');
 const routeService = require('../services/routes');
+const viewportService = require('../services/viewport');
 const { sendServerError } = require('../utils/errors');
 const { parseWorkers, parseMunicipalities } = require('../utils/queryParams');
 const { mapsLimiter, routesLimiter } = require('../middleware/rateLimit');
@@ -105,6 +106,24 @@ router.get('/routes', routesLimiter, async (req, res) => {
     res.json(routes);
   } catch (error) {
     return sendServerError(res, error, 'Error al obtener rutas');
+  }
+});
+
+/**
+ * @route   GET /viewport
+ * @desc    PERF-006: workers + points + routes en una petición
+ */
+router.get('/viewport', routesLimiter, async (req, res) => {
+  try {
+    const parsed = parseWorkers(req.query.workers, { required: true });
+    if (!parsed.ok) {
+      return res.status(parsed.status).json({ error: parsed.error });
+    }
+    logger.debug(`GET /viewport workers_count=${parsed.ids.length}`);
+    const viewport = await viewportService.getViewportForWorkers(parsed.ids);
+    res.json(viewport);
+  } catch (error) {
+    return sendServerError(res, error, 'Error al obtener viewport');
   }
 });
 

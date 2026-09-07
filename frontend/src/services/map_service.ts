@@ -43,6 +43,7 @@ export interface Worker {
     ape_1: string;
     ape_2: string;
     cif: string;
+    disponibilidad?: number | string;
 }
 
 /**
@@ -58,6 +59,15 @@ export interface RouteData {
   total: number;
 }
 
+/** PERF-006: respuesta agregada points + routes + workers (leyenda) */
+export interface ViewportData {
+  workers: Worker[];
+  points: MapPoint[];
+  routes: Array<any>;
+  total_points: number;
+  total_routes: number;
+}
+
 /**
  * Servicio de mapas que proporciona métodos para interactuar con la API del backend
  * y obtener datos geográficos, trabajadores y rutas optimizadas
@@ -68,6 +78,14 @@ let municipalitiesCache: Municipality[] | null = null;
 let municipalitiesInFlight: Promise<Municipality[]> | null = null;
 
 export const mapsService = {
+  /**
+   * PERF-006: points + routes + workers en una sola petición
+   */
+  async getViewport(workerIds: string[]): Promise<ViewportData> {
+    const queryParams = workerIds.map(id => `workers=${encodeURIComponent(id)}`).join('&');
+    return apiRequest<ViewportData>(`/maps/viewport?${queryParams}`);
+  },
+
   /**
    * Obtiene rutas optimizadas para los trabajadores seleccionados
    * @param {string[]} workerIds - Array de IDs de trabajadores

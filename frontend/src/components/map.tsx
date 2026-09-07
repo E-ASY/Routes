@@ -1,59 +1,54 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef } from 'react';
 import maplibregl from 'maplibre-gl';
 import { Deck } from '@deck.gl/core';
 import { PathLayer, ScatterplotLayer } from '@deck.gl/layers';
 import { CircularProgress, Backdrop, Paper, Typography } from '@mui/material';
 
-import { mapsService } from '../services/map_service';
 import { MapPoint } from '../services/map_service';
 
 interface MapProps {
   workers: string[];
-  clearCache?: boolean;
+  points: MapPoint[] | null;
+  routes: any[] | null;
+  isLoading?: boolean;
 }
 
-const Map: React.FC<MapProps> = ({ workers }) => {
+const Map: React.FC<MapProps> = ({ workers, points, routes, isLoading = false }) => {
   const mapRef = useRef<maplibregl.Map | null>(null);
   const deckRef = useRef<Deck | null>(null);
-  const [pointsByWorker, setPointsByWorker] = useState<MapPoint[] | null>(null);
-  const [routes, setRoutes] = useState<any[] | null>(null);
-  const [isLoading, setIsLoading] = useState<boolean>(false);
 
-  // Paleta de colores para trabajadores
   const WORKER_COLORS = [
-    [102, 197, 204], // #66C5CC
-    [246, 207, 113], // #F6CF71
-    [248, 156, 116], // #F89C74
-    [220, 176, 242], // #DCB0F2
-    [135, 197, 95],  // #87C55F
-    [158, 185, 243], // #9EB9F3
-    [254, 136, 177], // #FE88B1
-    [201, 219, 116], // #C9DB74
-    [139, 224, 164], // #8BE0A4
-    [180, 151, 231], // #B497E7
-    [211, 180, 132], // #D3B484
-    [179, 179, 179]  // #B3B3B3
+    [102, 197, 204],
+    [246, 207, 113],
+    [248, 156, 116],
+    [220, 176, 242],
+    [135, 197, 95],
+    [158, 185, 243],
+    [254, 136, 177],
+    [201, 219, 116],
+    [139, 224, 164],
+    [180, 151, 231],
+    [211, 180, 132],
+    [179, 179, 179]
   ];
 
-  // Función para asignar colores a trabajadores
   const getWorkerColor = (workerId: string | number): [number, number, number] => {
     const index = workers.indexOf(String(workerId));
-    return index >= 0 ? WORKER_COLORS[index % WORKER_COLORS.length] as [number, number, number] : [128, 128, 128];
+    return index >= 0
+      ? WORKER_COLORS[index % WORKER_COLORS.length] as [number, number, number]
+      : [128, 128, 128];
   };
 
-  // Inicializar el mapa
   useEffect(() => {
     const initializeMap = async () => {
       const INITIAL_VIEW_STATE = {
-        // Coordenadas iniciales del mapa (centro de Canarias)
         latitude: 28.203178,
         longitude: -16.196414,
         zoom: 9.25,
         bearing: 0,
         pitch: 30
       };
-      
-      // Estilo base de MapLibre (CARTO exige API key en raster basemaps)
+
       const cartoApiKey = import.meta.env.VITE_CARTO_API_KEY;
       if (!cartoApiKey) {
         console.warn('Falta VITE_CARTO_API_KEY en frontend/.env.local');
@@ -81,15 +76,14 @@ const Map: React.FC<MapProps> = ({ workers }) => {
             maxzoom: 19
           }
         ],
-        // Adding required properties to satisfy the StyleSpecification type
-        name: "Carto Voyager",
+        name: 'Carto Voyager',
         metadata: {},
         center: [INITIAL_VIEW_STATE.longitude, INITIAL_VIEW_STATE.latitude],
         zoom: INITIAL_VIEW_STATE.zoom,
         bearing: INITIAL_VIEW_STATE.bearing,
         pitch: INITIAL_VIEW_STATE.pitch
       };
-      
+
       if (!mapRef.current) {
         mapRef.current = new maplibregl.Map({
           container: 'map',
@@ -130,58 +124,18 @@ const Map: React.FC<MapProps> = ({ workers }) => {
     initializeMap();
   }, []);
 
-  // Cargar datos cuando cambian los trabajadores seleccionados
-  useEffect(() => {
-    const updateLayers = async () => {
-      if (workers.length > 0) {
-        setIsLoading(true);
-        try {
-          if (import.meta.env.DEV) {
-            console.log('Obteniendo puntos workers_count=', workers.length);
-          }
-          const points = await mapsService.getPoints(workers);
-          setPointsByWorker(points);
-          
-          try {
-            if (import.meta.env.DEV) {
-              console.log('Obteniendo rutas workers_count=', workers.length);
-            }
-            const routesData = await mapsService.getRoutes(workers);
-            setRoutes(routesData.routes);
-          } catch (routeError) {
-            console.error('Error al obtener rutas:', routeError);
-            // Continuar sin rutas, al menos mostrar los puntos
-          }
-        } catch (error) {
-          console.error('Error al actualizar capas:', error);
-        } finally {
-          setIsLoading(false);
-        }
-      } else {
-        setPointsByWorker(null);
-        setRoutes(null);
-      }
-    };
-
-    updateLayers();
-  }, [workers]);
-
-  // Actualizar capas del mapa
   useEffect(() => {
     if (!deckRef.current || !mapRef.current) return;
 
     const layers = [];
-    
-    // Capa de puntos (si hay puntos disponibles)
-    if (pointsByWorker && pointsByWorker.length > 0) {
+
+    if (points && points.length > 0) {
       layers.push(
         new ScatterplotLayer({
           id: 'worker-points',
-          data: pointsByWorker,
+          data: points,
           getPosition: (d: MapPoint) => [d.lon, d.lat],
-          getFillColor: (d: MapPoint) => {
-            return getWorkerColor(d.id);
-          },
+          getFillColor: (d: MapPoint) => getWorkerColor(d.id),
           getRadius: 120,
           radiusUnits: 'meters',
           radiusMinPixels: 6,
@@ -189,13 +143,12 @@ const Map: React.FC<MapProps> = ({ workers }) => {
           pickable: true,
           onClick: () => {},
           updateTriggers: {
-            getFillColor: workers // Actualizar colores cuando cambien los trabajadores
+            getFillColor: workers
           }
         })
       );
     }
-    
-    // Capa de rutas (si hay rutas disponibles)
+
     if (routes && routes.length > 0) {
       layers.push(
         new PathLayer({
@@ -214,24 +167,24 @@ const Map: React.FC<MapProps> = ({ workers }) => {
         })
       );
     }
-    
+
     deckRef.current.setProps({
       layers,
       canvas: mapRef.current.getCanvas()
     });
-  }, [pointsByWorker, routes, workers]);
+  }, [points, routes, workers]);
 
-return (
+  return (
     <div id="map" style={{ width: '100%', height: '100vh', position: 'relative' }}>
       <Backdrop
-        sx={{ 
-          color: '#fff', 
+        sx={{
+          color: '#fff',
           zIndex: 1000,
           backgroundColor: 'rgba(0, 0, 0, 0.7)'
         }}
         open={isLoading}
       >
-        <Paper 
+        <Paper
           elevation={4}
           sx={{
             padding: '20px 40px',
