@@ -6,9 +6,9 @@
  */
 const axios = require('axios');
 const dotenv = require('dotenv');
-const e = require('express');
 const NodeCache = require('node-cache');
-const { join } = require('path');
+const logger = require('../utils/logger');
+const { logMetric } = require('../utils/observability');
 
 dotenv.config();
 const API_KEY = process.env.VELNEO_API_KEY;
@@ -61,7 +61,7 @@ async function axiosGetWithRetry(url, config, endpoint) {
         throw error;
       }
       const delayMs = 500 * (2 ** (attempt - 1));
-      console.warn(
+      logger.warn(
         `Retry ${attempt}/${VELNEO_MAX_RETRIES} endpoint=${endpoint} ` +
         `reason=${status || error.code || error.message} wait_ms=${delayMs}`
       );
@@ -78,13 +78,14 @@ async function axiosGetWithRetry(url, config, endpoint) {
  * @param {Object} params - Parámetros adicionales para la consulta
  * @returns {Array} Datos obtenidos de todas las páginas del endpoint solicitado
  */
-async function fetchData(endpoint, params = {}) {
+async function fetchData(endpoint, params = {}, loadStats = null) {
   // api_key solo en la petición HTTP; nunca en logs (SEC-002)
   const url = `${BASE_URL}/${endpoint}?api_key=${API_KEY}`;
-  console.log(`Consultando Velneo endpoint=${endpoint} pageSize=${VELNEO_PAGE_SIZE}`);
+  logger.debug(`Consultando Velneo endpoint=${endpoint} pageSize=${VELNEO_PAGE_SIZE}`);
   const allData = [];
   let currentPage = 1;
   let hasMorePages = true;
+  let pages = 0;
 
   while (hasMorePages) {
     const pageParams = {
@@ -102,14 +103,15 @@ async function fetchData(endpoint, params = {}) {
       const messages = response.data.errors
         .map(err => (typeof err === 'string' ? err : err.message || JSON.stringify(err)))
         .join('; ');
-      console.error(`Velneo endpoint=${endpoint} devolvió errors: ${messages}`);
+      logger.error(`Velneo endpoint=${endpoint} devolvió errors: ${messages}`);
       if (!response.data[endpoint] || response.data[endpoint].length === 0) {
         throw new Error(`Velneo ${endpoint}: ${messages}`);
       }
     }
 
     const pageData = response.data[endpoint] || [];
-    console.log(`Endpoint ${endpoint} - Página ${currentPage}: ${pageData.length} items recibidos`);
+    pages += 1;
+    logger.debug(`Endpoint ${endpoint} - Página ${currentPage}: ${pageData.length} items recibidos`);
     if (pageData.length > 0) {
       allData.push(...pageData);
       currentPage++;
@@ -121,7 +123,14 @@ async function fetchData(endpoint, params = {}) {
     }
   }
 
-  console.log(`Total datos obtenidos de ${endpoint}: ${allData.length}`);
+  if (loadStats) {
+    loadStats.velneo_pages += pages;
+  }
+  logMetric('velneo_endpoint', {
+    endpoint,
+    items: allData.length,
+    pages,
+  });
   return allData;
 }
 
@@ -129,16 +138,16 @@ async function fetchData(endpoint, params = {}) {
  * Obtiene datos de múltiples endpoints en paralelo.
  * Si un endpoint crítico falla o viene vacío, lanza error (no se cachea dataset parcial).
  */
-async function fetchAllData() {
-  console.log('Iniciando obtención de todos los datos...');
+async function fetchAllData(loadStats = null) {
+  logger.info('Iniciando obtención de todos los datos...');
 
   const settled = await Promise.allSettled([
-    fetchData('ent_m', { fields: 'id,name,ape_1,ape_2,cif,es_tra_sim' }),
-    fetchData('ate_m', { fields: 'id,tip_ser,dir_lon,dir_lat,mun_m' }),
-    fetchData('ent_rel_m', { fields: 'ent,ent_rel,off,rel_tip' }),
-    fetchData('tip_ser', { fields: 'id,ent_m,mun_m,ser_nom' }),
-    fetchData('mun_m', { fields: 'id,name,pre_cps,cod_num' }),
-    fetchData('tra_m', { fields: 'id,tot_hor_con,hor_spapd,hor_pro,hor_cen,hor_uec' })
+    fetchData('ent_m', { fields: 'id,name,ape_1,ape_2,cif,es_tra_sim' }, loadStats),
+    fetchData('ate_m', { fields: 'id,tip_ser,dir_lon,dir_lat,mun_m' }, loadStats),
+    fetchData('ent_rel_m', { fields: 'ent,ent_rel,off,rel_tip' }, loadStats),
+    fetchData('tip_ser', { fields: 'id,ent_m,mun_m,ser_nom' }, loadStats),
+    fetchData('mun_m', { fields: 'id,name,pre_cps,cod_num' }, loadStats),
+    fetchData('tra_m', { fields: 'id,tot_hor_con,hor_spapd,hor_pro,hor_cen,hor_uec' }, loadStats)
   ]);
 
   const names = ['ent_m', 'ate_m', 'ent_rel_m', 'tip_ser', 'mun_m', 'tra_m'];
@@ -165,7 +174,7 @@ async function fetchAllData() {
   }
 
   if (failures.length > 0) {
-    console.warn('Endpoints no críticos con error:', failures.join(' | '));
+    logger.warn('Endpoints no críticos con error:', failures.join(' | '));
   }
 
   return results;
@@ -332,7 +341,7 @@ function enrichWorkerData(trabajadores, geoUsers) {
     } else if (geoUsers && typeof geoUsers === 'object' && geoUsers.id !== undefined) {
       geoUserMap[String(geoUsers.id)] = geoUsers;
     } else {
-      console.warn('geoUsers no tiene el formato esperado:', geoUsers);
+      logger.warn('geoUsers no tiene el formato esperado');
     }
     
     // Para cada trabajador, enriquecer sus entidades con datos geográficos
@@ -385,13 +394,13 @@ function filterMunicipalitiesByService(mun_m, tip_ser) {
       cod_num: municipality.cod_num
     }));
 
-  console.log(
+  logger.info(
     `Filtro municipios: tip_ser=${tip_ser.length}, mun_m=${mun_m.length}, ` +
     `con_servicio_4_6=${homeServiceMunicipalityIds.size}, resultado=${filtered.length}`
   );
   if (filtered.length === 0 && tip_ser.length > 0) {
     const sampleSerNom = [...new Set(tip_ser.slice(0, 50).map(s => `${typeof s.ser_nom}:${s.ser_nom}`))];
-    console.warn('Ningún municipio tras filtro. Muestra ser_nom:', sampleSerNom.join(', '));
+    logger.warn('Ningún municipio tras filtro. Muestra ser_nom:', sampleSerNom.join(', '));
   }
 
   return filtered;
@@ -422,7 +431,7 @@ function buildMunicipalitiesFallback(tip_ser, ate_m) {
       pre_cps: '',
       cod_num: id
     }));
-  console.warn(`Fallback municipios desde ate_m: ${fallback.length} ids`);
+  logger.warn(`Fallback municipios desde ate_m: ${fallback.length} ids`);
   return fallback;
 }
 
@@ -493,14 +502,19 @@ const dataCache = new NodeCache({ stdTTL: 3600 }); // Caché de 1 hora
  */
 let processedDataInFlight = null;
 
+/** PERF-009: último cold start medido */
+let lastProcessedLoad = null;
+
 async function loadAndCacheProcessedData() {
-  console.log('cache=miss Iniciando carga y procesamiento de datos Velneo');
+  const loadStats = { velneo_pages: 0 };
+  const started = Date.now();
+  logMetric('processed_data_load', { cache: 'miss', phase: 'start' });
   const fetchStarted = Date.now();
   let datasets;
   try {
-    datasets = await fetchAllData();
+    datasets = await fetchAllData(loadStats);
   } catch (error) {
-    console.error('cache=skip Carga Velneo fallida; no se guarda caché:', error.message);
+    logger.error('cache=skip Carga Velneo fallida; no se guarda caché:', error.message);
     throw error;
   }
   const { ent_m, ate_m, ent_rel_m, tip_ser, mun_m, tra_m } = datasets;
@@ -508,7 +522,7 @@ async function loadAndCacheProcessedData() {
   const processStarted = Date.now();
   let avilableMunicipalities = filterMunicipalitiesByService(mun_m, tip_ser);
   if (avilableMunicipalities.length === 0) {
-    console.warn(
+    logger.warn(
       'Lista de municipios vacía tras filtro (¿API key sin GET en mun_m?). ' +
       'Usando fallback temporal desde ate_m.'
     );
@@ -544,12 +558,33 @@ async function loadAndCacheProcessedData() {
     (acc, w) => acc + w.entidades.filter(e => e.mun_m === undefined || e.mun_m === null || e.mun_m === '').length,
     0
   );
-  console.log(
-    `Pipeline: userEntities=${userEntities.length}, workers=${workers.length}, entities=${entities.length}, ` +
-    `geoUsers=${availableGeoUsers.length}, finalData=${finalData.length}, ` +
-    `entidades_con_mun_m=${entidadesConMun}, entidades_sin_mun_m=${entidadesSinMun}, ` +
-    `fetch_ms=${fetchMs}, process_ms=${Date.now() - processStarted}`
-  );
+  const processMs = Date.now() - processStarted;
+  const durationMs = Date.now() - started;
+
+  lastProcessedLoad = {
+    at: new Date().toISOString(),
+    duration_ms: durationMs,
+    fetch_ms: fetchMs,
+    process_ms: processMs,
+    velneo_pages: loadStats.velneo_pages,
+    workers: workers.length,
+    final_data: finalData.length,
+  };
+
+  logMetric('processed_data_load', {
+    cache: 'set',
+    duration_ms: durationMs,
+    fetch_ms: fetchMs,
+    process_ms: processMs,
+    velneo_pages: loadStats.velneo_pages,
+    user_entities: userEntities.length,
+    workers: workers.length,
+    entities: entities.length,
+    geo_users: availableGeoUsers.length,
+    final_data: finalData.length,
+    entidades_con_mun_m: entidadesConMun,
+    entidades_sin_mun_m: entidadesSinMun,
+  });
 
   const result = {
     finalData,
@@ -563,19 +598,19 @@ async function loadAndCacheProcessedData() {
     pre_cps: muni.pre_cps,
     cod_num: muni.cod_num
   })));
-  console.log('cache=set Datos procesados guardados en caché');
+  logger.info('cache=set Datos procesados guardados en caché');
   return result;
 }
 
 async function getProcessedData() {
   const cachedData = dataCache.get('processed_data');
   if (cachedData) {
-    console.log('cache=hit Usando datos de caché');
+    logMetric('processed_data_load', { cache: 'hit' });
     return cachedData;
   }
 
   if (processedDataInFlight) {
-    console.log('cache=wait Esperando carga Velneo ya en curso');
+    logMetric('processed_data_load', { cache: 'wait' });
     return processedDataInFlight;
   }
 
@@ -594,7 +629,7 @@ async function getProcessedData() {
  */
 async function getPointsForWorkers(workers) {
   try {
-    console.log(`Obteniendo puntos para: ${workers.join(', ')}`);
+    logger.debug(`Obteniendo puntos workers_count=${workers.length}`);
     const pointsData = await getProcessedData();
     // Filtrar los datos para obtener solo los trabajadores solicitados
     const filteredData = pointsData.finalData.filter(worker => workers.includes(worker.id.toString()));
@@ -616,7 +651,7 @@ async function getPointsForWorkers(workers) {
 
     return points;
   } catch (error) {
-    console.error('Error al obtener puntos para trabajadores:', error.message);
+    logger.error('Error al obtener puntos para trabajadores:', error.message);
     throw error;
   }
 }
@@ -645,7 +680,7 @@ async function getPoints() {
   
       return points;
     } catch (error) {
-      console.error('Error al obtener puntos:', error.message);
+      logger.error('Error al obtener puntos:', error.message);
       throw error;
     }
   }
@@ -655,7 +690,7 @@ async function getPoints() {
  * @returns {Array} Lista de trabajadores con información básica
  */
 async function getWorkers() {
-  console.log('Obteniendo lista de trabajadores');
+  logger.info('Obteniendo lista de trabajadores');
   try {
     const data = await getProcessedData();
     const workers = data.finalData.map(worker => ({
@@ -668,7 +703,7 @@ async function getWorkers() {
   
     return workers;
   } catch (error) {
-    console.error('Error al obtener trabajadores:', error.message);
+    logger.error('Error al obtener trabajadores:', error.message);
     throw error;
   }
 }
@@ -692,7 +727,7 @@ async function getWorkersByID(ids) {
   
     return workers;
   } catch (error) {
-    console.error('Error al obtener trabajadores:', error.message);
+    logger.error('Error al obtener trabajadores:', error.message);
     throw error;
   }
 }
@@ -704,11 +739,12 @@ async function getWorkersByID(ids) {
 let municipalitiesInFlight = null;
 
 async function loadMunicipalitiesLight() {
-  console.log('municipalities=miss Carga ligera mun_m + tip_ser');
+  const loadStats = { velneo_pages: 0 };
   const started = Date.now();
+  logMetric('municipalities_load', { cache: 'miss', phase: 'start' });
   const [munSettled, tipSettled] = await Promise.allSettled([
-    fetchData('mun_m', { fields: 'id,name,pre_cps,cod_num' }),
-    fetchData('tip_ser', { fields: 'id,ent_m,mun_m,ser_nom' })
+    fetchData('mun_m', { fields: 'id,name,pre_cps,cod_num' }, loadStats),
+    fetchData('tip_ser', { fields: 'id,ent_m,mun_m,ser_nom' }, loadStats)
   ]);
 
   const mun_m = munSettled.status === 'fulfilled' ? munSettled.value : [];
@@ -723,8 +759,8 @@ async function loadMunicipalitiesLight() {
 
   let list = filterMunicipalitiesByService(mun_m, tip_ser);
   if (list.length === 0) {
-    console.warn('Carga ligera: filtro vacío; intentando fallback con ate_m');
-    const ate_m = await fetchData('ate_m', { fields: 'id,tip_ser,dir_lon,dir_lat,mun_m' });
+    logger.warn('Carga ligera: filtro vacío; intentando fallback con ate_m');
+    const ate_m = await fetchData('ate_m', { fields: 'id,tip_ser,dir_lon,dir_lat,mun_m' }, loadStats);
     list = buildMunicipalitiesFallback(tip_ser, ate_m);
   }
 
@@ -736,9 +772,12 @@ async function loadMunicipalitiesLight() {
   }));
 
   dataCache.set('municipalities', municipalities);
-  console.log(
-    `municipalities=set count=${municipalities.length} fetch_ms=${Date.now() - started}`
-  );
+  logMetric('municipalities_load', {
+    cache: 'set',
+    count: municipalities.length,
+    duration_ms: Date.now() - started,
+    velneo_pages: loadStats.velneo_pages,
+  });
   return municipalities;
 }
 
@@ -747,11 +786,10 @@ async function loadMunicipalitiesLight() {
  * PERF-005: prioriza caché completa o carga ligera; no dispara el pipeline completo.
  */
 async function getMunicipalities() {
-  console.log('Obteniendo lista de municipios disponibles');
   try {
     const fullCached = dataCache.get('processed_data');
     if (fullCached?.avilableMunicipalities) {
-      console.log('municipalities=hit (desde processed_data)');
+      logMetric('municipalities_load', { cache: 'hit', source: 'processed_data' });
       return fullCached.avilableMunicipalities.map(muni => ({
         id: muni.id,
         name: muni.name,
@@ -762,12 +800,12 @@ async function getMunicipalities() {
 
     const lightCached = dataCache.get('municipalities');
     if (lightCached) {
-      console.log('municipalities=hit (caché ligera)');
+      logMetric('municipalities_load', { cache: 'hit', source: 'light' });
       return lightCached;
     }
 
     if (municipalitiesInFlight) {
-      console.log('municipalities=wait');
+      logMetric('municipalities_load', { cache: 'wait' });
       return municipalitiesInFlight;
     }
 
@@ -778,7 +816,7 @@ async function getMunicipalities() {
 
     return municipalitiesInFlight;
   } catch (error) {
-    console.error('Error al obtener municipios:', error.message);
+    logger.error('Error al obtener municipios:', error.message);
     throw error;
   }
 }
@@ -790,7 +828,7 @@ async function getMunicipalities() {
  */
 async function getWorkersByMunicipalities(municipalities) {
   try {
-    console.log(`Obteniendo trabajadores para municipios: ${municipalities.join(', ')}`);
+    logger.debug(`Obteniendo trabajadores municipalities_count=${municipalities.length}`);
     const data = await getProcessedData();
     const municipalityIds = municipalities.map(m => String(m));
     // Solo filtra las trabajadoras que tengan al menos una entidad en esos municipios
@@ -811,15 +849,27 @@ async function getWorkersByMunicipalities(municipalities) {
         cif: worker.cif,
       }));
 
-    console.log(
-      `trabajadores_filtrados=${workers.length} (finalData=${data.finalData.length}, municipios=${municipalityIds.join(',')})`
+    logger.info(
+      `trabajadores_filtrados=${workers.length} (finalData=${data.finalData.length}, municipalities_count=${municipalityIds.length})`
     );
   
     return workers;
   } catch (error) {
-    console.error('Error al obtener trabajadores por municipios:', error.message);
+    logger.error('Error al obtener trabajadores por municipios:', error.message);
     throw error;
   }
+}
+
+/**
+ * Snapshot para GET /health (PERF-009). Sin PII.
+ */
+function getHealth() {
+  return {
+    processed_data_cached: Boolean(dataCache.get('processed_data')),
+    municipalities_cached: Boolean(dataCache.get('municipalities')),
+    load_in_flight: Boolean(processedDataInFlight),
+    last_processed_load: lastProcessedLoad,
+  };
 }
 
 module.exports = {
@@ -832,5 +882,6 @@ module.exports = {
   getWorkers,
   getWorkersByID,
   getMunicipalities,
-  getWorkersByMunicipalities
+  getWorkersByMunicipalities,
+  getHealth,
 };

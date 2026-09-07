@@ -38,11 +38,9 @@ const WorkerSelector: React.FC<WorkerSelectorProps> = ({ onFilterChange, municip
     setError(null);
 
     const timer = window.setTimeout(async () => {
-      console.log('Cargando trabajadores para municipios:', municipalities);
       try {
         const workers = await mapsService.getWorkersByMunicipalities(municipalities);
         if (cancelled) return;
-        console.log('Trabajadores filtrados:', workers);
 
         const workerOptions: WorkerOption[] = workers.map(worker => ({
           value: worker.id.toString(),

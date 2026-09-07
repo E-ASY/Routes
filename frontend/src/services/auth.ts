@@ -6,15 +6,11 @@ import { apiRequest } from './config';
  * @property {string} [name] - Nombre del usuario
  * @property {string} [email] - Correo electrónico del usuario
  * @property {string} [picture] - URL de la imagen de perfil del usuario
- * @property {string} [sub] - Identificador único del usuario en Auth0
- * @property {any} [key: string] - Propiedad dinámica para campos adicionales
  */
 export interface AuthUser {
   name?: string;
   email?: string;
   picture?: string;
-  sub?: string;
-  [key: string]: any;
 }
 
 /**

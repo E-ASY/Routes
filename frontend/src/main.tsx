@@ -8,9 +8,7 @@ import MunicipalitySelector from './components/municipality_selector';
 import Legend from './components/legend';
 import AuthGuard from './components/auth/guard';
 
-console.log('App component initialized');
 const App: React.FC = () => {
-  console.log('Rendering App component');
   const [municipalities, setMunicipalities] = useState<string[]>([]);
   const [workers, setWorkers] = useState<string[]>([]);
 

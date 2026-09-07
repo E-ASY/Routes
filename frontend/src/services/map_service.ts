@@ -1,15 +1,6 @@
 import { apiRequest } from './config';
 
 /**
- * Representa los datos completos del mapa devueltos por el backend
- * @interface MapData
- * @property {Array<any>} final_data - Datos procesados de trabajadores con sus entidades geográficas
- */
-export interface MapData {
-  final_data: Array<any>;
-}
-
-/**
  * Representa un punto geográfico en el mapa con información del trabajador asociado
  * @interface MapPoint
  * @property {number} lat - Latitud del punto
@@ -77,14 +68,6 @@ let municipalitiesCache: Municipality[] | null = null;
 let municipalitiesInFlight: Promise<Municipality[]> | null = null;
 
 export const mapsService = {
-  /**
-   * Obtiene todos los datos del mapa incluyendo trabajadores y puntos geográficos
-   * @returns {Promise<MapData>} Datos completos del mapa
-   */
-  async getData(): Promise<MapData> {
-    return apiRequest<MapData>('/maps/data');
-  },
-  
   /**
    * Obtiene rutas optimizadas para los trabajadores seleccionados
    * @param {string[]} workerIds - Array de IDs de trabajadores

@@ -136,22 +136,24 @@ const Map: React.FC<MapProps> = ({ workers }) => {
       if (workers.length > 0) {
         setIsLoading(true);
         try {
-          console.log("Obteniendo puntos para:", workers);
+          if (import.meta.env.DEV) {
+            console.log('Obteniendo puntos workers_count=', workers.length);
+          }
           const points = await mapsService.getPoints(workers);
-          console.log("Puntos recibidos:", points);
           setPointsByWorker(points);
           
           try {
-            console.log("Obteniendo rutas para:", workers);
+            if (import.meta.env.DEV) {
+              console.log('Obteniendo rutas workers_count=', workers.length);
+            }
             const routesData = await mapsService.getRoutes(workers);
-            console.log("Rutas recibidas:", routesData);
             setRoutes(routesData.routes);
           } catch (routeError) {
-            console.error("Error al obtener rutas:", routeError);
+            console.error('Error al obtener rutas:', routeError);
             // Continuar sin rutas, al menos mostrar los puntos
           }
         } catch (error) {
-          console.error("Error al actualizar capas:", error);
+          console.error('Error al actualizar capas:', error);
         } finally {
           setIsLoading(false);
         }
@@ -185,9 +187,7 @@ const Map: React.FC<MapProps> = ({ workers }) => {
           radiusMinPixels: 6,
           radiusMaxPixels: 15,
           pickable: true,
-          onClick: (info) => {
-            console.log('Punto seleccionado:', info.object);
-          },
+          onClick: () => {},
           updateTriggers: {
             getFillColor: workers // Actualizar colores cuando cambien los trabajadores
           }
@@ -197,8 +197,6 @@ const Map: React.FC<MapProps> = ({ workers }) => {
     
     // Capa de rutas (si hay rutas disponibles)
     if (routes && routes.length > 0) {
-      console.log("Añadiendo capa de rutas con", routes.length, "rutas");
-      
       layers.push(
         new PathLayer({
           id: 'worker-routes',
@@ -209,9 +207,7 @@ const Map: React.FC<MapProps> = ({ workers }) => {
           widthUnits: 'meters',
           widthMinPixels: 2,
           pickable: true,
-          onClick: (info) => {
-            console.log('Ruta seleccionada:', info.object);
-          },
+          onClick: () => {},
           updateTriggers: {
             getColor: workers
           }

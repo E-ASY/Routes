@@ -23,9 +23,7 @@ const MunicipalitySelector: React.FC<MunicipalitySelectorProps> = ({ onFilterCha
       setIsLoading(true);
       setError(null);
       try {
-        console.log('Cargando municipios...');
         const municipalities = await mapsService.getMunicipalities();
-        console.log('Municipalities loaded:', municipalities);
         const municipalityOptions: MunicipalityOption[] = municipalities.map(muni => ({
           value: muni.id.toString(),
           label: `${muni.name || ''} (${muni.cod_num || ''})`

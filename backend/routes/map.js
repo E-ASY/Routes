@@ -7,22 +7,14 @@ const express = require('express');
 const router = express.Router();
 const dataService = require('../services/data');
 const routeService = require('../services/routes');
-console.log('mapRoutes cargado');
-/**
- * @route   GET /data
- * @desc    Obtiene todos los datos procesados necesarios para la aplicación de mapas
- * @returns {Object} Datos procesados para visualización en el mapa
- */
-router.get('/data', async (req, res) => {
-  try {
-    const data = await dataService.getProcessedData();
-    
-    res.json(data);
-  } catch (error) {
-    console.error('Error al obtener los datos necesarios:', error);
-    res.status(500).json({ error: 'Error al obtener los datos necesarios', details: error.message });
-  }
-});
+const { sendServerError } = require('../utils/errors');
+const { parseWorkers, parseMunicipalities } = require('../utils/queryParams');
+const { mapsLimiter, routesLimiter } = require('../middleware/rateLimit');
+const logger = require('../utils/logger');
+
+logger.debug('mapRoutes cargado');
+
+router.use(mapsLimiter);
 
 /**
  * @route   GET /points
@@ -32,31 +24,21 @@ router.get('/data', async (req, res) => {
  */
 router.get('/points', async (req, res) => {
   try {
-    const { workers } = req.query;
-    if (!workers) {
-      return res.status(400).json({ 
-        error: 'Se requiere el parámetro workers' 
-      });
+    const parsed = parseWorkers(req.query.workers, { required: true });
+    if (!parsed.ok) {
+      return res.status(parsed.status).json({ error: parsed.error });
     }
-    // Normalizar los IDs de trabajadores (convertir a array si es un único valor)
-    const workerIds = Array.isArray(workers) ? workers : [workers];
-    // Obtener los puntos utilizando el servicio de datos
-    const points = await dataService.getPointsForWorkers(workerIds);
-    // Devolver los puntos como respuesta JSON
+    logger.debug(`GET /points workers_count=${parsed.ids.length}`);
+    const points = await dataService.getPointsForWorkers(parsed.ids);
     res.json({
       points,
       total: points.length,
-      workers: workerIds
+      workers: parsed.ids,
     });
   } catch (error) {
-    console.error('Error al obtener puntos para trabajadores:', error);
-    res.status(500).json({ 
-      error: 'Error al obtener puntos para trabajadores', 
-      details: error.message 
-    });
+    return sendServerError(res, error, 'Error al obtener puntos para trabajadores');
   }
 });
-
 
 /**
  * @route GET /municipalities
@@ -64,16 +46,13 @@ router.get('/points', async (req, res) => {
  * @returns {Array} Lista de municipios con sus detalles
  */
 router.get('/municipalities', async (req, res) => {
-  console.log('Petición recibida para /municipalities');
   try {
     const municipalities = await dataService.getMunicipalities();
     res.json(municipalities);
   } catch (error) {
-    console.error('Error al obtener municipios:', error);
-    res.status(500).json({ error: 'Error al obtener municipios', details: error.message });
+    return sendServerError(res, error, 'Error al obtener municipios');
   }
 });
-
 
 /**
  * @route   GET /workers
@@ -82,34 +61,32 @@ router.get('/municipalities', async (req, res) => {
  * @returns {Array} Lista de trabajadores con su información
  */
 router.get('/workers', async (req, res) => {
-  console.log('Petición recibida para /workers');
   try {
-    // Filtrar por IDs de trabajadores si se proporcionan
     if (req.query.workers) {
-      console.log('IDs de trabajadores proporcionados:', req.query.workers);
-      const workerIds = Array.isArray(req.query.workers) ? req.query.workers : [req.query.workers];
-      const workers = await dataService.getWorkersByID(workerIds);
+      const parsed = parseWorkers(req.query.workers);
+      if (!parsed.ok) {
+        return res.status(parsed.status).json({ error: parsed.error });
+      }
+      logger.debug(`GET /workers by_id count=${parsed.ids.length}`);
+      const workers = await dataService.getWorkersByID(parsed.ids);
       return res.json(workers);
     }
-    // Filtrar por municipios si se proporcionan
     if (req.query.municipalities) {
-      const municipalities = Array.isArray(req.query.municipalities)
-        ? req.query.municipalities
-        : [req.query.municipalities];
-      console.log('Municipios proporcionados:', municipalities);
-      const workers = await dataService.getWorkersByMunicipalities(municipalities);
+      const parsed = parseMunicipalities(req.query.municipalities);
+      if (!parsed.ok) {
+        return res.status(parsed.status).json({ error: parsed.error });
+      }
+      logger.debug(`GET /workers by_muni count=${parsed.ids.length}`);
+      const workers = await dataService.getWorkersByMunicipalities(parsed.ids);
       return res.json(workers);
     }
-    // Si no hay filtros, devolver todos los trabajadores
-    console.log('No se proporcionaron filtros, obteniendo todos los trabajadores');
+    logger.debug('GET /workers sin filtro');
     const workers = await dataService.getWorkers();
     res.json(workers);
   } catch (error) {
-    console.error('Error al obtener trabajadores:', error);
-    res.status(500).json({ error: 'Error al obtener trabajadores', details: error.message });
+    return sendServerError(res, error, 'Error al obtener trabajadores');
   }
 });
-
 
 /**
  * @route   GET /routes
@@ -117,18 +94,17 @@ router.get('/workers', async (req, res) => {
  * @param   {String|Array} req.query.workers - ID o IDs de trabajadores
  * @returns {Object} Rutas calculadas para los trabajadores especificados
  */
-router.get('/routes', async (req, res) => {
+router.get('/routes', routesLimiter, async (req, res) => {
   try {
-    const { workers } = req.query;
-    if (!workers) {
-      return res.status(400).json({ error: 'Se requiere el parámetro workers' });
+    const parsed = parseWorkers(req.query.workers, { required: true });
+    if (!parsed.ok) {
+      return res.status(parsed.status).json({ error: parsed.error });
     }
-    const workerIds = Array.isArray(workers) ? workers : [workers];
-    const routes = await routeService.getRoutesForWorkers(workerIds);
+    logger.debug(`GET /routes workers_count=${parsed.ids.length}`);
+    const routes = await routeService.getRoutesForWorkers(parsed.ids);
     res.json(routes);
   } catch (error) {
-    console.error('Error al obtener rutas:', error);
-    res.status(500).json({ error: 'Error al obtener rutas', details: error.message });
+    return sendServerError(res, error, 'Error al obtener rutas');
   }
 });
 

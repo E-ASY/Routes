@@ -4,7 +4,7 @@
 **Rama de trabajo:** `routes/fix`  
 **Fecha de auditoría:** 2026-09-07  
 **Alcance:** backend Express/Auth0, frontend React/Vite, consultas a Velneo y Google Routes.  
-**Última actualización de trabajo:** 2026-09-07 (Fase 0 en curso)
+**Última actualización de trabajo:** 2026-09-07 (Fase 2: PERF-009)
 
 ## Registro de avances
 
@@ -24,6 +24,18 @@
 | 2026-09-07 | PERF-005 | `/municipalities` carga ligera `mun_m`+`tip_ser` (no pipeline completo) | `backend/services/data.js` | Logs `municipalities=hit\|miss\|wait\|set`; full load solo al pedir workers/points/routes |
 | 2026-09-07 | PERF-007 | Caché municipios en cliente + debounce 400ms en workers | `frontend/src/services/map_service.ts`, `worker_selector.tsx` | Remounts no re-fetchan municipios; 5 municipios seguidos → 1 request workers |
 | 2026-09-07 | ops | `GOOGLE_API_KEY` y `VELNEO_API_KEY` verificadas (Routes OK, mun_m total=89) | `backend/.env` | Reiniciar backend para vaciar caché de rutas fallidas |
+| 2026-09-07 | PERF-008 + SEC-016 | Retry/backoff Google Routes; LRU+TTL; no cachear fallos; skip mismo punto | `backend/services/routes.js` | Env: `GOOGLE_ROUTES_*`, `ROUTE_CACHE_TTL_MS`, `ROUTE_CACHE_MAX` |
+| 2026-09-07 | SEC-006 | 500 sin `details` en prod; `requestId` en logs y JSON | `backend/utils/errors.js`, `routes/map.js`, `main.js` | En `development` sí se envía `details` |
+| 2026-09-07 | SEC-008 | Máx. 20 workers / 50 municipios; IDs tipados | `backend/utils/queryParams.js`, `routes/map.js` | Env: `MAX_WORKERS`, `MAX_MUNICIPALITIES`. SEC-017 (Zod) sigue open |
+| 2026-09-07 | SEC-009 | `trust proxy` configurable (`TRUST_PROXY`) | `backend/main.js` | Default 1 hop para IP/`X-Forwarded-Proto` |
+| 2026-09-07 | SEC-007 | Rate limit IP+usuario; más estricto en `/routes` y `/data` | `backend/middleware/rateLimit.js`, `routes/map.js` | Env: `RATE_LIMIT_*`; cabecera `Retry-After` |
+| 2026-09-07 | SEC-005 | Eliminado `GET /maps/data` y cliente `getData()` | `backend/routes/map.js`, `frontend/.../map_service.ts` | UI ya usaba endpoints filtrados |
+| 2026-09-07 | SEC-011 | `npm audit fix` + axios/express; eliminados JWT no usados | `backend/package.json`, lockfile | `npm audit --audit-level=high` → 0. Avance SEC-023 |
+| 2026-09-07 | SEC-010 | No se guarda `id_token` en express-session; se borra si existía | `backend/main.js` | Auth0 cookie OIDC sigue siendo la fuente de auth |
+| 2026-09-07 | SEC-018 | `/auth/check` solo expone `{ name, email, picture }` | `backend/routes/auth.js`, `frontend/.../auth.ts` | Sin claims Auth0 internos |
+| 2026-09-07 | SEC-022 | Logger por niveles; sin IDs/coords/PII en logs info; frontend sin dump en prod | `backend/utils/logger.js`, services, map routes, frontend | `LOG_LEVEL` / `DEBUG_ACUFADE_DATA` |
+| 2026-09-07 | SEC-019 | Fail-fast env + `.env.example`; `config.js` centraliza secretos Auth0/sesión | `backend/config.js`, `main.js`, `.env.example` | `AUTH0_SECRET` opcional (avance SEC-015) |
+| 2026-09-07 | PERF-009 | `/health` + logs `event=` (duration_ms, cache, velneo_pages, google_routes) | `observability.js`, `data.js`, `routes.js`, `main.js` | Sin auth en `/health` |
 
 ### Verificación realizada / pendiente
 
@@ -65,25 +77,25 @@
 | SEC-002 | P0 | Dejar de loguear API key de Velneo y rotarla | Seguridad | in_progress (falta rotar clave) |
 | SEC-003 | P0 | Cerrar open redirect en `GET /` | Seguridad | done (código) |
 | SEC-004 | P1 | RBAC / scopes Auth0 en `/maps/*` | Seguridad | open |
-| SEC-005 | P1 | Restringir o eliminar `GET /maps/data` | Seguridad | open |
-| SEC-006 | P1 | Errores genéricos en producción | Seguridad | open |
-| SEC-007 | P1 | Rate limiting en endpoints costosos | Seguridad | open |
-| SEC-008 | P1 | Límites y validación de `workers` / query params | Seguridad | open |
-| SEC-009 | P1 | `trust proxy` y cookies detrás de reverse proxy | Seguridad | open |
-| SEC-010 | P1 | No almacenar `id_token` en sesión sin uso | Seguridad | open |
-| SEC-011 | P1 | Actualizar dependencias vulnerables (backend) | Seguridad | open |
+| SEC-005 | P1 | Restringir o eliminar `GET /maps/data` | Seguridad | done (código) |
+| SEC-006 | P1 | Errores genéricos en producción | Seguridad | done (código) |
+| SEC-007 | P1 | Rate limiting en endpoints costosos | Seguridad | done (código) |
+| SEC-008 | P1 | Límites y validación de `workers` / query params | Seguridad | done (código) |
+| SEC-009 | P1 | `trust proxy` y cookies detrás de reverse proxy | Seguridad | done (código) |
+| SEC-010 | P1 | No almacenar `id_token` en sesión sin uso | Seguridad | done (código) |
+| SEC-011 | P1 | Actualizar dependencias vulnerables (backend) | Seguridad | done (código) |
 | SEC-012 | P2 | API key Velneo fuera del query string | Seguridad | open |
 | SEC-013 | P2 | CORS dinámico por entorno | Seguridad | open (avance parcial vía ALLOWED_ORIGINS) |
 | SEC-014 | P2 | Unificar sistema de sesiones | Seguridad | open |
 | SEC-015 | P2 | Secreto OIDC separado del client secret | Seguridad | open |
-| SEC-016 | P2 | Caché de rutas con TTL / LRU | Seguridad + Perf | open |
+| SEC-016 | P2 | Caché de rutas con TTL / LRU | Seguridad + Perf | done (código) |
 | SEC-017 | P2 | Validación de entrada con schema | Seguridad | open |
-| SEC-018 | P2 | DTO mínimo en `/auth/check` | Seguridad | open |
-| SEC-019 | P2 | Fail-fast de variables de entorno | Seguridad | open |
+| SEC-018 | P2 | DTO mínimo en `/auth/check` | Seguridad | done (código) |
+| SEC-019 | P2 | Fail-fast de variables de entorno | Seguridad | done (código) |
 | SEC-020 | P2 | Auditar / actualizar dependencias frontend | Seguridad | open |
 | SEC-021 | P3 | Logout CSRF (GET) | Seguridad | open |
-| SEC-022 | P2 | Eliminar logs verbosos con PII | Seguridad | open |
-| SEC-023 | P2 | Eliminar dependencias no usadas | Seguridad | open |
+| SEC-022 | P2 | Eliminar logs verbosos con PII | Seguridad | done (código) |
+| SEC-023 | P2 | Eliminar dependencias no usadas | Seguridad | in_progress (backend done) |
 | PERF-001 | P1 | Single-flight / anti cache stampede | Rendimiento | done (código) |
 | PERF-002 | P1 | Joins e índices O(n+m) con `Map`/`Set` | Rendimiento | done (código) |
 | PERF-003 | P1 | Corregir filtro lógico de `entities` | Correctitud | done (código) |
@@ -91,8 +103,8 @@
 | PERF-005 | P2 | Cold start ligero para municipios | Rendimiento | done (código) |
 | PERF-006 | P2 | Endpoint agregado / menos round-trips UI | Rendimiento | open |
 | PERF-007 | P2 | Caché cliente + debounce selectores | Rendimiento | done (código) |
-| PERF-008 | P2 | Google Routes: timeout, backoff, cuota | Rendimiento | open |
-| PERF-009 | P2 | Baseline y observabilidad mínima | Rendimiento | open |
+| PERF-008 | P2 | Google Routes: timeout, backoff, cuota | Rendimiento | done (código) |
+| PERF-009 | P2 | Baseline y observabilidad mínima | Rendimiento | done (código) |
 | PERF-010 | P3 | ETL diario / almacenamiento persistente | Escalado | open |
 | PERF-011 | P3 | Caché compartida (Redis) | Escalado | open |
 | PERF-012 | P3 | Filtros nativos en Velneo | Escalado | open |
@@ -152,76 +164,76 @@
 
 | Campo | Detalle |
 |-------|---------|
-| **Estado** | open |
-| **Evidencia** | [`backend/routes/map.js:16-24`](backend/routes/map.js) → `getProcessedData()` completo; UI no lo consume |
+| **Estado** | done (código) — 2026-09-07 |
+| **Evidencia** | Endpoint retirado de `backend/routes/map.js`; `getData`/`MapData` retirados del frontend |
 | **Impacto** | Dump masivo de PII en una petición. |
-| **Solución** | Eliminar endpoint o restringir a admin; UI solo usa endpoints filtrados. |
-| **Dependencias** | SEC-004 si se mantiene como admin-only |
-| **Criterio de aceptación** | Endpoint inexistente o admin-only. Payload usado por UI sin dump completo de `finalData`. |
+| **Solución aplicada** | Eliminación del endpoint (UI solo usa `/municipalities`, `/workers`, `/points`, `/routes`). |
+| **Dependencias** | — |
+| **Criterio de aceptación** | `GET /maps/data` → **404**. UI sigue funcionando con endpoints filtrados. |
 
 ## SEC-006 — Errores genéricos en producción (P1)
 
 | Campo | Detalle |
 |-------|---------|
-| **Estado** | open |
-| **Evidencia** | [`backend/routes/map.js:23,53-55,73,109,131`](backend/routes/map.js) — `details: error.message` |
+| **Estado** | done (código) — 2026-09-07 |
+| **Evidencia** | `sendServerError` / `globalErrorHandler` en `backend/utils/errors.js` |
 | **Impacto** | Fuga de detalles internos al cliente. |
-| **Solución** | Respuestas 500 genéricas; detalle solo en logs con correlation ID. |
-| **Dependencias** | PERF-009 (opcional, correlation ID) |
+| **Solución aplicada** | JSON 500 con `error` + `requestId`; `details` solo si `NODE_ENV !== 'production'`. |
+| **Dependencias** | PERF-009 (correlation ID más rico, opcional) |
 | **Criterio de aceptación** | Con `NODE_ENV=production`, JSON 500 **sin** campo `details`. |
 
 ## SEC-007 — Rate limiting en endpoints costosos (P1)
 
 | Campo | Detalle |
 |-------|---------|
-| **Estado** | open |
-| **Evidencia** | Sin `express-rate-limit`; [`/maps/routes`](backend/routes/map.js), `/maps/data`, `/maps/workers` |
+| **Estado** | done (código) — 2026-09-07 |
+| **Evidencia** | `backend/middleware/rateLimit.js`; aplicado en `routes/map.js` |
 | **Impacto** | Agotar cuota Google Routes / saturar Velneo (DoS económico). |
-| **Solución** | Rate limit por IP + usuario; umbrales más estrictos en `/maps/routes`. |
-| **Dependencias** | SEC-008, SEC-009 (`trust proxy` para IP real) |
+| **Solución aplicada** | `express-rate-limit`: maps 60/min, routes 20/min, data 10/min; clave IP (`ipKeyGenerator`) + `sub`/email; `Retry-After`. |
+| **Dependencias** | SEC-008, SEC-009 |
 | **Criterio de aceptación** | Tras N peticiones en ventana T → **429** + `Retry-After`. |
 
 ## SEC-008 — Límites y validación de `workers` / query params (P1)
 
 | Campo | Detalle |
 |-------|---------|
-| **Estado** | open |
-| **Evidencia** | [`backend/routes/map.js:122-127`](backend/routes/map.js); frontend limita UI a 12 pero API no |
+| **Estado** | done (código) — 2026-09-07 |
+| **Evidencia** | `parseWorkers` / `parseMunicipalities` en `backend/utils/queryParams.js` |
 | **Impacto** | `?workers=` × cientos dispara llamadas Google. |
-| **Solución** | Máx. 12–20 workers; IDs tipados; rechazar arrays oversized. |
-| **Dependencias** | SEC-017 |
-| **Criterio de aceptación** | >20 workers → **400**. 5 workers válidos → **200**. |
+| **Solución aplicada** | Máx. 20 workers / 50 municipios; regex ID; dedupe. Override: `MAX_WORKERS`, `MAX_MUNICIPALITIES`. |
+| **Dependencias** | SEC-017 (schema Zod/Joi, pendiente) |
+| **Criterio de aceptación** | >20 workers → **400**. ≤20 IDs válidos → pasan validación. |
 
 ## SEC-009 — `trust proxy` y cookies detrás de reverse proxy (P1)
 
 | Campo | Detalle |
 |-------|---------|
-| **Estado** | open |
-| **Evidencia** | No hay `app.set('trust proxy', ...)` en [`backend/main.js`](backend/main.js) |
+| **Estado** | done (código) — 2026-09-07 |
+| **Evidencia** | `app.set('trust proxy', …)` en `backend/main.js` |
 | **Impacto** | Cookies `Secure` / IP de rate limit incorrectas tras Heroku/ALB. |
-| **Solución** | `app.set('trust proxy', 1)` (o valor PaaS). Validar `X-Forwarded-Proto`. |
+| **Solución aplicada** | Default 1 hop; override `TRUST_PROXY` (`false`/`0`/`N`/`true`). |
 | **Dependencias** | Ninguna |
-| **Criterio de aceptación** | Login en staging HTTPS: cookie con `Secure` + `HttpOnly` + `SameSite` correcto. |
+| **Criterio de aceptación** | `req.ip` refleja cliente tras proxy; cookies Secure en HTTPS vía `X-Forwarded-Proto`. |
 
 ## SEC-010 — No almacenar `id_token` en sesión sin uso (P1)
 
 | Campo | Detalle |
 |-------|---------|
-| **Estado** | open |
-| **Evidencia** | [`backend/main.js:85-87`](backend/main.js) |
+| **Estado** | done (código) — 2026-09-07 |
+| **Evidencia** | `backend/main.js` ya no asigna `req.session.id_token`; limpia restos previos |
 | **Impacto** | Superficie extra si la sesión se compromete. |
-| **Solución** | Eliminar almacenamiento o documentar TTL y uso. |
-| **Dependencias** | SEC-014 |
-| **Criterio de aceptación** | Sesión sin `id_token` tras login, o justificación + no exposición en `/auth/check`. |
+| **Solución aplicada** | Eliminado almacenamiento; auth vía cookie `express-openid-connect`. |
+| **Dependencias** | SEC-014 (unificar sesiones, pendiente) |
+| **Criterio de aceptación** | Tras login, sesión express sin `id_token`. |
 
 ## SEC-011 — Actualizar dependencias vulnerables (backend) (P1)
 
 | Campo | Detalle |
 |-------|---------|
-| **Estado** | open |
-| **Evidencia** | `npm audit` backend: 16 vulns; axios `^1.8.4` con advisories high/critical |
+| **Estado** | done (código) — 2026-09-07 |
+| **Evidencia** | `npm audit --audit-level=high` → 0 vulnerabilidades |
 | **Impacto** | DoS, prototype pollution, SSRF latente en axios/qs/etc. |
-| **Solución** | Actualizar axios ≥ versión parcheada; `npm audit fix`; gate CI `--audit-level=high`. |
+| **Solución aplicada** | `npm audit fix`; bumps axios/express/session; eliminados `express-jwt`, `jsonwebtoken`, `jwks-rsa` (no usados; Auth0 vía OIDC). |
 | **Dependencias** | Ninguna |
 | **Criterio de aceptación** | `npm audit --audit-level=high` en backend sin high/critical. |
 
@@ -273,12 +285,12 @@
 
 | Campo | Detalle |
 |-------|---------|
-| **Estado** | open |
-| **Evidencia** | [`backend/services/routes.js:17-18`](backend/services/routes.js) — `Map()` sin eviction |
-| **Impacto** | OOM / DoS por crecimiento ilimitado. |
-| **Solución** | LRU + TTL (o Redis en P3). |
+| **Estado** | done (código) — 2026-09-07 |
+| **Evidencia** | `TtlLruCache` en `routes.js`; defaults TTL 1 h, max 1000 tramos / 200 trabajadores. |
+| **Impacto** | OOM / DoS por crecimiento ilimitado; caché de fallos bloqueaba reintentos. |
+| **Solución aplicada** | LRU+TTL; no cachear polylines/nulos ni trabajadores sin ruta válida. |
 | **Dependencias** | PERF-008 |
-| **Criterio de aceptación** | Tras N entradas, eviction de antiguas. Memoria estable en test de carga. |
+| **Criterio de aceptación** | Entradas caducan/evictan; tras arreglar API key no hace falta limpiar fallos cacheados. |
 
 ## SEC-017 — Validación de entrada con schema (P2)
 
@@ -295,10 +307,10 @@
 
 | Campo | Detalle |
 |-------|---------|
-| **Estado** | open |
-| **Evidencia** | [`backend/routes/auth.js:15-18`](backend/routes/auth.js) — `user: req.oidc.user` |
+| **Estado** | done (código) — 2026-09-07 |
+| **Evidencia** | `toPublicUser()` en `backend/routes/auth.js` |
 | **Impacto** | Claims internos Auth0 expuestos al frontend. |
-| **Solución** | `{ name, email, picture }` (campos usados por UI). |
+| **Solución aplicada** | Respuesta `{ name, email, picture }` alineada con `user_info.tsx`. |
 | **Dependencias** | Ninguna |
 | **Criterio de aceptación** | JSON sin claims no usados por el frontend. |
 
@@ -306,11 +318,11 @@
 
 | Campo | Detalle |
 |-------|---------|
-| **Estado** | open |
-| **Evidencia** | `dotenv.config()` sin checks; no hay `.env.example` trackeado |
+| **Estado** | done (código) — 2026-09-07 |
+| **Evidencia** | `backend/config.js` valida 9 vars; `.env.example` trackeado |
 | **Impacto** | Arranque incompleto → secretos por defecto / fallos silenciosos. |
-| **Solución** | Módulo `config.js` que valide vars obligatorias; añadir `.env.example` sin secretos. |
-| **Dependencias** | SEC-001, SEC-015 |
+| **Solución aplicada** | Exit 1 con lista de faltantes; `main.js` usa `config`; `AUTH0_SECRET` opcional. |
+| **Dependencias** | SEC-001 (cubierto); SEC-015 parcial |
 | **Criterio de aceptación** | Falta var obligatoria → exit code ≠ 0 con mensaje explícito. |
 
 ## SEC-020 — Auditar / actualizar dependencias frontend (P2)
@@ -339,19 +351,19 @@
 
 | Campo | Detalle |
 |-------|---------|
-| **Estado** | open |
-| **Evidencia** | [`frontend/src/components/map.tsx`](frontend/src/components/map.tsx); [`backend/routes/map.js`](backend/routes/map.js) |
+| **Estado** | done (código) — 2026-09-07 |
+| **Evidencia** | `backend/utils/logger.js`; rutas/servicios sin IDs/coords en nivel info; frontend gated con `import.meta.env.DEV` |
 | **Impacto** | PII en DevTools y logs de servidor. |
-| **Solución** | Logger con niveles; `no-console` en CI para prod. |
-| **Dependencias** | PERF-009 |
+| **Solución aplicada** | Logger `error/warn/info/debug`; métricas con counts; sin dumps de workers/puntos/rutas en build prod. |
+| **Dependencias** | PERF-009 (métricas más ricas, opcional) |
 | **Criterio de aceptación** | Build prod sin logs de puntos/rutas/IDs operativos. |
 
 ## SEC-023 — Eliminar dependencias no usadas (P2)
 
 | Campo | Detalle |
 |-------|---------|
-| **Estado** | open |
-| **Evidencia** | Backend: `express-jwt`, `jsonwebtoken`, `jwks-rsa` sin uso; frontend: `@auth0/auth0-react` sin import |
+| **Estado** | in_progress — backend JWT limpio (2026-09-07); falta frontend `@auth0/auth0-react` |
+| **Evidencia** | Backend: eliminados con SEC-011. Frontend: `@auth0/auth0-react` sin import (pendiente). |
 | **Impacto** | Superficie supply-chain y confusión arquitectónica. |
 | **Solución** | Eliminar paquetes huérfanos. |
 | **Dependencias** | Ninguna |
@@ -444,23 +456,23 @@
 
 | Campo | Detalle |
 |-------|---------|
-| **Estado** | open |
-| **Evidencia** | [`backend/services/routes.js:66-85`](backend/services/routes.js) — sin timeout axios; TRANSIT luego DRIVE |
-| **Impacto** | Requests colgados; coste 2× por tramo; sin backoff 429. |
-| **Solución** | Timeout; retry 429/503 con `Retry-After`; métricas de cuota; revisar modo por defecto. |
-| **Dependencias** | SEC-007, SEC-016 |
-| **Criterio de aceptación** | 0 requests colgados > 30 s. Política de reintento documentada. |
+| **Estado** | done (código) — 2026-09-07 |
+| **Evidencia** | `postGoogleRoute` con timeout 15 s, retry 429/503/`Retry-After`; log `google_routes_calls`. |
+| **Impacto** | Requests colgados; coste 2×; sin backoff. |
+| **Solución aplicada** | Timeout + retry; skip origen=destino; TRANSIT sin `routeModifiers` luego DRIVE. |
+| **Dependencias** | SEC-016 |
+| **Criterio de aceptación** | Sin colgados > timeout; reintentos visibles en logs ante 429/503. |
 
 ## PERF-009 — Baseline y observabilidad mínima (P2)
 
 | Campo | Detalle |
 |-------|---------|
-| **Estado** | open |
-| **Evidencia** | Solo `console.log`; sin `/health`, sin métricas de cache/Velneo/Google |
+| **Estado** | done (código) — 2026-09-07 |
+| **Evidencia** | `GET /health`; `logMetric` con `event=processed_data_load\|municipalities_load\|velneo_endpoint\|google_routes_batch\|http_request` |
 | **Impacto** | Imposible demostrar mejoras con datos. |
-| **Solución** | Logs estructurados: `duration_ms`, `cache` hit\|miss\|wait, `velneo_pages`, `google_routes_calls`; `/health`. |
-| **Dependencias** | Ninguna (habilita medición de resto) |
-| **Criterio de aceptación** | Tras un cold start, logs permiten leer duración y páginas sin inspección manual ad hoc. |
+| **Solución aplicada** | Logs key=value (`duration_ms`, `cache`, `velneo_pages`, `google_routes_calls`); health sin auth. |
+| **Dependencias** | Ninguna |
+| **Criterio de aceptación** | Tras cold start, logs permiten leer duración y páginas; `/health` responde 200. |
 
 ## PERF-010 — ETL diario / almacenamiento persistente (P3)
 
