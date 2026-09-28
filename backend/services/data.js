@@ -9,6 +9,12 @@ const dotenv = require('dotenv');
 const NodeCache = require('node-cache');
 const logger = require('../utils/logger');
 const { logMetric } = require('../utils/observability');
+const {
+  loadProcessedSnapshot,
+  loadMunicipalitiesSnapshot,
+  saveProcessedSnapshot,
+  getSnapshotHealth,
+} = require('./snapshotStore');
 
 dotenv.config();
 const API_KEY = process.env.VELNEO_API_KEY;
@@ -18,18 +24,159 @@ const VELNEO_PAGE_SIZE = Number(process.env.VELNEO_PAGE_SIZE) || 500;
 const VELNEO_MAX_RETRIES = Number(process.env.VELNEO_MAX_RETRIES) || 3;
 const VELNEO_TIMEOUT_MS = Number(process.env.VELNEO_TIMEOUT_MS) || 20000;
 
-/** Velneo puede devolver booleanos como 0/1 o true/false */
+/** Servicios de interés (SPAPD / asistencia personal) — mismos IDs que el filtro en memoria */
+const INTEREST_SER_NOM = ['4', '6'];
+
+/**
+ * PERF-012: index/filterQuery solo surten efecto en ApiRest v2.
+ * En v1 los mismos params se ignoran en silencio (misma cardinalidad).
+ */
+function isVelneoV2() {
+  return /\/v2(?:\/|$)/i.test(String(BASE_URL || ''));
+}
+
+/** tip_ser: ser_nom ∈ {4,6} vía index + {add} (OR). */
+function tipSerInterestParams() {
+  if (!isVelneoV2()) return {};
+  return {
+    'index[ser_nom]': INTEREST_SER_NOM[0],
+    'index[ser_nom{add}]': INTEREST_SER_NOM[1],
+  };
+}
+
+/** ent_rel_m: solo relaciones activas (off = 0/false). */
+function entRelActiveParams() {
+  if (!isVelneoV2()) return {};
+  return { 'filterQuery[off]': 0 };
+}
+
+/**
+ * ent_m trabajadoras (índice id_es_tra_sim / campo es_tra_sim).
+ * off = Baja del sistema (true = baja; false = activa).
+ */
+function entMWorkersParams() {
+  if (!isVelneoV2()) return {};
+  return {
+    'filterQuery[es_tra_sim]': 1,
+    'filterQuery[off]': 0,
+  };
+}
+
+/** ent_m usuarias activas (es_tra_sim = 0, off = 0). */
+function entMUsersParams() {
+  if (!isVelneoV2()) return {};
+  return {
+    'filterQuery[es_tra_sim]': 0,
+    'filterQuery[off]': 0,
+  };
+}
+
+let loggedVelneoFilterMode = false;
+function logVelneoFilterModeOnce() {
+  if (loggedVelneoFilterMode) return;
+  loggedVelneoFilterMode = true;
+  if (isVelneoV2()) {
+    logger.info(
+      'PERF-012: Velneo v2 — tip_ser(ser_nom 4|6), ent_rel_m(off=0), ' +
+      'ent_m(filterQuery es_tra_sim + off=0 Baja del sistema) activos'
+    );
+  } else {
+    logger.warn(
+      'PERF-012: BASE_URL no es v2; index/filterQuery no reducen volumen. ' +
+      'Usa .../v2/ en VELNEO_API_BASE_URL.'
+    );
+  }
+}
+
+/**
+ * Velneo puede devolver booleanos como 0/1, true/false o Si/No.
+ */
 function isTraSim(value) {
-  return value === true || value === 1 || value === '1';
+  if (value === true || value === 1 || value === '1') return true;
+  if (value == null || value === '' || value === false || value === 0 || value === '0') {
+    return false;
+  }
+  const normalized = String(value).trim().toLowerCase();
+  return (
+    normalized === 'si' ||
+    normalized === 'sí' ||
+    normalized === 'yes' ||
+    normalized === 'true'
+  );
 }
 
 function isUserEntity(value) {
-  return value === false || value === 0 || value === '0';
+  if (value === false || value === 0 || value === '0') return true;
+  if (value === true || value === 1 || value === '1') return false;
+  if (value == null || value === '') return false;
+  const normalized = String(value).trim().toLowerCase();
+  if (normalized === 'no' || normalized === 'false') return true;
+  if (
+    normalized === 'si' ||
+    normalized === 'sí' ||
+    normalized === 'yes' ||
+    normalized === 'true'
+  ) {
+    return false;
+  }
+  return false;
+}
+
+/**
+ * ENT_M.off = “Baja del sistema” en la UI Velneo.
+ * true / 1 / Si = baja; false / 0 / No = activa.
+ * (El campo UI “Desactivado” / desactivado no está expuesto en esta API key.)
+ */
+function isEntityDeactivated(value) {
+  if (value === true || value === 1 || value === '1') return true;
+  if (value === false || value === 0 || value === '0' || value == null || value === '') {
+    return false;
+  }
+  const normalized = String(value).trim().toLowerCase();
+  if (normalized === 'si' || normalized === 'sí' || normalized === 'yes' || normalized === 'true') {
+    return true;
+  }
+  if (normalized === 'no' || normalized === 'false') {
+    return false;
+  }
+  return false;
+}
+
+function isEntityActive(value) {
+  return !isEntityDeactivated(value);
+}
+
+/** True si la fila trae la clave off (aunque sea false/0). */
+function rowHasOffField(row) {
+  return row != null && Object.prototype.hasOwnProperty.call(row, 'off');
 }
 
 /** Relación activa: off = false/0 */
 function isRelationActive(off) {
   return off === false || off === 0 || off === '0';
+}
+
+/** Coordenadas de mapa utilizables (no 0 / null / NaN) */
+function hasValidCoords(lat, lon) {
+  const la = Number(lat);
+  const lo = Number(lon);
+  return Number.isFinite(la) && Number.isFinite(lo) && la !== 0 && lo !== 0;
+}
+
+/** Trabajadora con al menos una usuaria activa geolocalizada */
+function workerHasMappableUsers(worker) {
+  return (
+    Array.isArray(worker?.entidades) &&
+    worker.entidades.some((e) => hasValidCoords(e.dir_lat, e.dir_lon))
+  );
+}
+
+/** No baja del sistema y con usuarias visibles en mapa */
+function workerIsSelectable(worker) {
+  if (rowHasOffField(worker) && isEntityDeactivated(worker.off)) {
+    return false;
+  }
+  return workerHasMappableUsers(worker);
 }
 
 function idsEqual(a, b) {
@@ -140,12 +287,57 @@ async function fetchData(endpoint, params = {}, loadStats = null) {
  */
 async function fetchAllData(loadStats = null) {
   logger.info('Iniciando obtención de todos los datos...');
+  logVelneoFilterModeOnce();
+
+  const tipSerParams = { fields: 'id,ent_m,mun_m,ser_nom', ...tipSerInterestParams() };
+  const entRelParams = { fields: 'ent,ent_rel,off,rel_tip', ...entRelActiveParams() };
+  // off = Baja del sistema en ENT_M
+  const entMFields = 'id,name,ape_1,ape_2,cif,es_tra_sim,off';
+
+  async function fetchEntMSlice(filterParams) {
+    return fetchData('ent_m', { fields: entMFields, ...filterParams }, loadStats);
+  }
+
+  async function fetchEntM() {
+    // v1 ignora filterQuery: una sola pasada evita duplicar ~17k filas
+    if (!isVelneoV2()) {
+      const all = await fetchEntMSlice({});
+      logger.info(`ent_m_total=${all.length} (v1 sin filterQuery es_tra_sim/off)`);
+      return all;
+    }
+
+    const [workers, users] = await Promise.all([
+      fetchEntMSlice(entMWorkersParams()),
+      fetchEntMSlice(entMUsersParams()),
+    ]);
+    const bajasInWorkers = workers.filter(
+      (w) => rowHasOffField(w) && isEntityDeactivated(w.off)
+    ).length;
+    logger.info(
+      `ent_m_workers=${workers.length} ent_m_users=${users.length} ` +
+      `workers_baja_off=${bajasInWorkers}`
+    );
+    logMetric('ent_m_split', {
+      workers: workers.length,
+      users: users.length,
+      total: workers.length + users.length,
+      workers_baja_off: bajasInWorkers,
+    });
+    // Seguridad en memoria por si filterQuery[off] no aplica
+    const workersActive = workers.filter(
+      (w) => !rowHasOffField(w) || isEntityActive(w.off)
+    );
+    const usersActive = users.filter(
+      (u) => !rowHasOffField(u) || isEntityActive(u.off)
+    );
+    return [...workersActive, ...usersActive];
+  }
 
   const settled = await Promise.allSettled([
-    fetchData('ent_m', { fields: 'id,name,ape_1,ape_2,cif,es_tra_sim' }, loadStats),
+    fetchEntM(),
     fetchData('ate_m', { fields: 'id,tip_ser,dir_lon,dir_lat,mun_m' }, loadStats),
-    fetchData('ent_rel_m', { fields: 'ent,ent_rel,off,rel_tip' }, loadStats),
-    fetchData('tip_ser', { fields: 'id,ent_m,mun_m,ser_nom' }, loadStats),
+    fetchData('ent_rel_m', entRelParams, loadStats),
+    fetchData('tip_ser', tipSerParams, loadStats),
     fetchData('mun_m', { fields: 'id,name,pre_cps,cod_num' }, loadStats),
     fetchData('tra_m', { fields: 'id,tot_hor_con,hor_spapd,hor_pro,hor_cen,hor_uec' }, loadStats)
   ]);
@@ -293,7 +485,11 @@ function cleanWorkersData(data) {
       if (!workerGroups[entRel]) {
         if (item.relatedWorker && item.relatedWorker.length > 0) {
           const workerInfo = item.relatedWorker[0];
-          if (isTraSim(workerInfo.es_tra_sim) /*&& (item.rel_tip == 2 || item.rel_tip == 14)*/) {
+          if (
+            isTraSim(workerInfo.es_tra_sim) &&
+            (!rowHasOffField(workerInfo) || isEntityActive(workerInfo.off))
+            /*&& (item.rel_tip == 2 || item.rel_tip == 14)*/
+          ) {
             workerGroups[entRel] = {
               id: item.ent_rel,
               name: workerInfo.name,
@@ -301,6 +497,7 @@ function cleanWorkersData(data) {
               ape_2: workerInfo.ape_2,
               cif: workerInfo.cif,
               es_tra_sim: workerInfo.es_tra_sim,
+              off: workerInfo.off,
               disponibilidad: workerInfo.disponibilidad,
               entidades: [] // Lista para almacenar todas las entidades relacionadas
             };
@@ -356,6 +553,7 @@ function enrichWorkerData(trabajadores, geoUsers) {
             name: geoUser.name,
             ape_1: geoUser.ape_1,
             ape_2: geoUser.ape_2,
+            cif: geoUser.cif,
             dir_lat: geoUser.dir_lat,
             dir_lon: geoUser.dir_lon,
             mun_m: geoUser.mun_m,
@@ -372,13 +570,39 @@ function enrichWorkerData(trabajadores, geoUsers) {
 }
 
 /**
+ * Añade dir_lat/dir_lon de ate_m a cada trabajadora (mismo id de entidad).
+ */
+function attachWorkerHomeCoords(workers, ate_m) {
+  const ateById = new Map();
+  for (const ate of ate_m || []) {
+    if (ate?.id === undefined || ate?.id === null) continue;
+    ateById.set(String(ate.id), ate);
+  }
+  return (workers || []).map((worker) => {
+    const ate = ateById.get(String(worker.id));
+    if (!ate) return worker;
+    const lat = Number(ate.dir_lat);
+    const lon = Number(ate.dir_lon);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon) || lat === 0 || lon === 0) {
+      return worker;
+    }
+    return {
+      ...worker,
+      dir_lat: lat,
+      dir_lon: lon,
+      home_mun_m: ate.mun_m ?? null,
+    };
+  });
+}
+
+/**
  * Filtrar los municipios que ofrecen los servicios de promoción de la autonomía personal en domicilio y asistencia personal
  * @param {Array} mun_m - Lista de municipios
  * @param {Array} tip_ser - Lista de servicios
  * @returns {Array} Lista de municipios que ofrecen los servicios de promoción de la autonomía personal en domicilio y asistencia personal
  */ 
 function filterMunicipalitiesByService(mun_m, tip_ser) {
-  const interestServices = new Set(['4', '6']);
+  const interestServices = new Set(INTEREST_SER_NOM);
   const homeServiceMunicipalityIds = new Set(
     tip_ser
       .filter(service => interestServices.has(String(service.ser_nom)))
@@ -411,7 +635,7 @@ function filterMunicipalitiesByService(mun_m, tip_ser) {
  * deriva IDs de municipio desde ate_m de entidades con servicios 4/6.
  */
 function buildMunicipalitiesFallback(tip_ser, ate_m) {
-  const interestServices = new Set(['4', '6']);
+  const interestServices = new Set(INTEREST_SER_NOM);
   const entityIds = new Set(
     tip_ser
       .filter(service => interestServices.has(String(service.ser_nom)))
@@ -442,7 +666,7 @@ function buildMunicipalitiesFallback(tip_ser, ate_m) {
  * @returns {Array} Lista de IDs de usuarios filtrados por municipio
  */
 function filterEntitiesByMunicipality(tip_ser, municipalities_available) {
-  const interestServices = new Set(['4', '6']);
+  const interestServices = new Set(INTEREST_SER_NOM);
   const municipalityIds = new Set(municipalities_available.map(muni => String(muni.id)));
   // tip_ser puede no exponer mun_m con esta API key; en ese caso filtramos solo por servicio
   const hasMunOnTipSer = tip_ser.some(s => s.mun_m !== undefined && s.mun_m !== null && s.mun_m !== '');
@@ -475,7 +699,14 @@ function getAvailableWorkers(ent_m, tra_m) {
   return ent_m
     .filter(worker => {
       const tra = traMap[String(worker.id)];
-      return isTraSim(worker.es_tra_sim) && tra && Number(tra.hor_spapd) > 0;
+      if (rowHasOffField(worker) && isEntityDeactivated(worker.off)) {
+        return false;
+      }
+      return (
+        isTraSim(worker.es_tra_sim) &&
+        tra &&
+        Number(tra.hor_spapd) > 0
+      );
     })
     .map(worker => {
       const tra = traMap[String(worker.id)];
@@ -548,7 +779,17 @@ async function loadAndCacheProcessedData() {
     'relatedWorker'
   );
   const groupedWorkers = cleanWorkersData(relationsWithWorker);
-  const finalData = enrichWorkerData(groupedWorkers, availableGeoUsers);
+  const enrichedWorkers = enrichWorkerData(groupedWorkers, availableGeoUsers);
+  // Ubicación de la trabajadora (ate_m con el mismo id); no entra en rutas de usuarias
+  const withHome = attachWorkerHomeCoords(enrichedWorkers, ate_m);
+  // Solo activas y visibles en mapa: ≥1 usuaria con relación off=0 y coords válidas
+  const finalData = withHome.filter(workerIsSelectable);
+  const droppedInactive = withHome.length - finalData.length;
+  if (droppedInactive > 0) {
+    logger.info(
+      `Trabajadoras excluidas (desactivadas o sin usuarias en mapa): ${droppedInactive} (quedan ${finalData.length})`
+    );
+  }
 
   const entidadesConMun = finalData.reduce(
     (acc, w) => acc + w.entidades.filter(e => e.mun_m !== undefined && e.mun_m !== null && e.mun_m !== '').length,
@@ -599,13 +840,58 @@ async function loadAndCacheProcessedData() {
     cod_num: muni.cod_num
   })));
   logger.info('cache=set Datos procesados guardados en caché');
+
+  // PERF-010: materializar a disco (job diario / reinicios no golpean Velneo si TTL fresco)
+  try {
+    await saveProcessedSnapshot(result, {
+      velneo_pages: loadStats.velneo_pages,
+      duration_ms: durationMs,
+      source: 'velneo',
+    });
+  } catch (error) {
+    logger.warn(`snapshot_save_failed err=${error.message}`);
+  }
+
   return result;
+}
+
+/**
+ * Hidrata NodeCache desde snapshot en disco si está fresco.
+ * @returns {Promise<object|null>}
+ */
+async function tryHydrateFromSnapshot() {
+  const snap = await loadProcessedSnapshot();
+  if (!snap) return null;
+  const before = Array.isArray(snap.finalData) ? snap.finalData.length : 0;
+  const finalData = (snap.finalData || []).filter(workerIsSelectable);
+  if (finalData.length !== before) {
+    logger.info(
+      `Snapshot: trabajadoras excluidas (desactivadas / sin mapa) ${before - finalData.length} (quedan ${finalData.length})`
+    );
+  }
+  const hydrated = { ...snap, finalData };
+  dataCache.set('processed_data', hydrated);
+  dataCache.set(
+    'municipalities',
+    (snap.avilableMunicipalities || []).map((muni) => ({
+      id: muni.id,
+      name: muni.name,
+      pre_cps: muni.pre_cps,
+      cod_num: muni.cod_num,
+    }))
+  );
+  logMetric('processed_data_load', {
+    cache: 'hit',
+    source: 'snapshot',
+    workers: finalData.length,
+  });
+  return hydrated;
 }
 
 async function getProcessedData() {
   const cachedData = dataCache.get('processed_data');
   if (cachedData) {
-    logMetric('processed_data_load', { cache: 'hit' });
+    logMetric('processed_data_load', { cache: 'hit', source: 'memory' });
     return cachedData;
   }
 
@@ -614,12 +900,59 @@ async function getProcessedData() {
     return processedDataInFlight;
   }
 
-  processedDataInFlight = loadAndCacheProcessedData()
-    .finally(() => {
-      processedDataInFlight = null;
-    });
+  processedDataInFlight = (async () => {
+    const fromDisk = await tryHydrateFromSnapshot();
+    if (fromDisk) return fromDisk;
+    return loadAndCacheProcessedData();
+  })().finally(() => {
+    processedDataInFlight = null;
+  });
 
   return processedDataInFlight;
+}
+
+/**
+ * PERF-010: fuerza re-fetch Velneo + reescribe snapshot (CLI / cron / UI).
+ * Single-flight: un solo refresh a la vez para todos los usuarios.
+ */
+let refreshSnapshotInFlight = null;
+
+async function refreshSnapshotFromVelneo() {
+  if (refreshSnapshotInFlight) {
+    return refreshSnapshotInFlight;
+  }
+  refreshSnapshotInFlight = (async () => {
+    dataCache.del('processed_data');
+    dataCache.del('municipalities');
+    const result = await loadAndCacheProcessedData();
+    return {
+      workers: result.finalData.length,
+      municipalities: result.avilableMunicipalities.length,
+      updated_at: getSnapshotHealth().createdAt || lastProcessedLoad?.at || new Date().toISOString(),
+      health: getSnapshotHealth(),
+    };
+  })().finally(() => {
+    refreshSnapshotInFlight = null;
+  });
+  return refreshSnapshotInFlight;
+}
+
+/**
+ * Estado de frescura de datos (sin PII) para la UI.
+ */
+function getDataStatus() {
+  const snapshot = getSnapshotHealth();
+  const updatedAt =
+    snapshot.createdAt ||
+    lastProcessedLoad?.at ||
+    null;
+  return {
+    updated_at: updatedAt,
+    snapshot_fresh: Boolean(snapshot.fresh),
+    snapshot_enabled: Boolean(snapshot.enabled),
+    processed_data_cached: Boolean(dataCache.get('processed_data')),
+    refresh_in_flight: Boolean(refreshSnapshotInFlight || processedDataInFlight),
+  };
 }
 
 /**
@@ -631,25 +964,56 @@ async function getPointsForWorkers(workers) {
   try {
     logger.debug(`Obteniendo puntos workers_count=${workers.length}`);
     const pointsData = await getProcessedData();
+    const idSet = new Set((workers || []).map((id) => String(id)));
     // Filtrar los datos para obtener solo los trabajadores solicitados
-    const filteredData = pointsData.finalData.filter(worker => workers.includes(worker.id.toString()));
-    // Obtener las entidades de cada trabajador
-    const points = filteredData.flatMap(worker => 
-        worker.entidades
-          .filter(entidad => entidad.dir_lat && entidad.dir_lon) // Asegurar que existen coordenadas
-          .map(entidad => ({
-            lat: entidad.dir_lat,
-            lon: entidad.dir_lon,
-            id: worker.id,
-            workerName: worker.name,
-            workerApe1: worker.ape_1,
-            workerApe2: worker.ape_2,
-            workerCif: worker.cif,
-            workerDisponibilidad: worker.disponibilidad,
-          }))
-      );
+    const filteredData = pointsData.finalData.filter((worker) =>
+      idSet.has(String(worker.id))
+    );
+    // Usuarias atendidas
+    const userPoints = filteredData.flatMap((worker) =>
+      worker.entidades
+        .filter((entidad) => hasValidCoords(entidad.dir_lat, entidad.dir_lon))
+        .map((entidad) => ({
+          lat: Number(entidad.dir_lat),
+          lon: Number(entidad.dir_lon),
+          id: worker.id,
+          kind: 'user',
+          userId: entidad.ent,
+          userName: entidad.name || '',
+          userApe1: entidad.ape_1 || '',
+          userApe2: entidad.ape_2 || '',
+          userCif: entidad.cif || '',
+          userMunId: entidad.mun_m ?? null,
+          workerName: worker.name,
+          workerApe1: worker.ape_1,
+          workerApe2: worker.ape_2,
+          workerCif: worker.cif,
+          workerDisponibilidad: worker.disponibilidad,
+        }))
+    );
 
-    return points;
+    // Domicilio / ubicación de la propia trabajadora (distinto en mapa)
+    const workerHomePoints = filteredData
+      .filter((worker) => hasValidCoords(worker.dir_lat, worker.dir_lon))
+      .map((worker) => ({
+        lat: Number(worker.dir_lat),
+        lon: Number(worker.dir_lon),
+        id: worker.id,
+        kind: 'worker',
+        userId: worker.id,
+        userName: worker.name || '',
+        userApe1: worker.ape_1 || '',
+        userApe2: worker.ape_2 || '',
+        userCif: worker.cif || '',
+        userMunId: worker.home_mun_m ?? null,
+        workerName: worker.name,
+        workerApe1: worker.ape_1,
+        workerApe2: worker.ape_2,
+        workerCif: worker.cif,
+        workerDisponibilidad: worker.disponibilidad,
+      }));
+
+    return [...userPoints, ...workerHomePoints];
   } catch (error) {
     logger.error('Error al obtener puntos para trabajadores:', error.message);
     throw error;
@@ -671,6 +1035,13 @@ async function getPoints() {
               lat: entidad.dir_lat,
               lon: entidad.dir_lon,
               id: worker.id,
+              kind: 'user',
+              userId: entidad.ent,
+              userName: entidad.name || '',
+              userApe1: entidad.ape_1 || '',
+              userApe2: entidad.ape_2 || '',
+              userCif: entidad.cif || '',
+              userMunId: entidad.mun_m ?? null,
               workerName: worker.name,
               workerApe1: worker.ape_1,
               workerApe2: worker.ape_2,
@@ -741,10 +1112,25 @@ let municipalitiesInFlight = null;
 async function loadMunicipalitiesLight() {
   const loadStats = { velneo_pages: 0 };
   const started = Date.now();
+  logVelneoFilterModeOnce();
+
+  const fromSnap = await loadMunicipalitiesSnapshot();
+  if (fromSnap) {
+    dataCache.set('municipalities', fromSnap);
+    logMetric('municipalities_load', {
+      cache: 'hit',
+      source: 'snapshot',
+      count: fromSnap.length,
+      duration_ms: Date.now() - started,
+    });
+    return fromSnap;
+  }
+
   logMetric('municipalities_load', { cache: 'miss', phase: 'start' });
+  const tipSerParams = { fields: 'id,ent_m,mun_m,ser_nom', ...tipSerInterestParams() };
   const [munSettled, tipSettled] = await Promise.allSettled([
     fetchData('mun_m', { fields: 'id,name,pre_cps,cod_num' }, loadStats),
-    fetchData('tip_ser', { fields: 'id,ent_m,mun_m,ser_nom' }, loadStats)
+    fetchData('tip_ser', tipSerParams, loadStats)
   ]);
 
   const mun_m = munSettled.status === 'fulfilled' ? munSettled.value : [];
@@ -869,6 +1255,7 @@ function getHealth() {
     municipalities_cached: Boolean(dataCache.get('municipalities')),
     load_in_flight: Boolean(processedDataInFlight),
     last_processed_load: lastProcessedLoad,
+    snapshot: getSnapshotHealth(),
   };
 }
 
@@ -877,6 +1264,8 @@ module.exports = {
   fetchAllData,
   joinData,
   getProcessedData,
+  refreshSnapshotFromVelneo,
+  getDataStatus,
   getPointsForWorkers,
   getPoints,
   getWorkers,

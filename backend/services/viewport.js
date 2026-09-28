@@ -21,6 +21,7 @@ async function getViewportForWorkers(workerIds) {
 
   const routesResult = await routeService.getRoutesForWorkers(workerIds, { points });
   const routes = Array.isArray(routesResult?.routes) ? routesResult.routes : [];
+  const mileage_by_worker = routesResult?.mileage_by_worker || {};
 
   logMetric('viewport_load', {
     workers_count: workerIds.length,
@@ -33,6 +34,7 @@ async function getViewportForWorkers(workerIds) {
     workers,
     points,
     routes,
+    mileage_by_worker,
     total_points: points.length,
     total_routes: routes.length,
   };

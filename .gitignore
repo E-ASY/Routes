@@ -37,3 +37,7 @@ Thumbs.db
 
 # Local deployment metadata
 .vercel/
+
+# PERF-010: snapshots locales (pueden contener PII)
+**/data/snapshots/
+!**/data/snapshots/.gitkeep

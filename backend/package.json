@@ -6,7 +6,8 @@
     "start": "node main.js",
     "dev": "nodemon main.js",
     "audit:high": "npm audit --audit-level=high",
-    "test": "node --test tests/**/*.test.js"
+    "test": "node --test tests/**/*.test.js",
+    "snapshot:refresh": "node scripts/refreshSnapshot.js"
   },
   "keywords": [],
   "author": "",

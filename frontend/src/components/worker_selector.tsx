@@ -1,88 +1,67 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import Select, { MultiValue } from 'react-select';
 import { mapsService } from '../services/map_service';
 
-// Interfaz para las opciones de trabajador
 interface WorkerOption {
-  label: string;     // Nombre completo + CIF para mostrar
-  value: string;     // ID del trabajador para enviar a otros componentes
+  label: string;
+  value: string;
 }
 
 interface WorkerSelectorProps {
+  selectedIds: string[];
   onFilterChange: (selectedWorkers: string[]) => void;
-  municipalities: string[];
 }
 
-/** PERF-007: evita N peticiones al marcar municipios seguidos */
-const WORKERS_DEBOUNCE_MS = 400;
-
-const WorkerSelector: React.FC<WorkerSelectorProps> = ({ onFilterChange, municipalities }) => {
-  const [selectedOptions, setSelectedOptions] = useState<MultiValue<WorkerOption>>([]);
+const WorkerSelector: React.FC<WorkerSelectorProps> = ({ selectedIds, onFilterChange }) => {
   const [options, setOptions] = useState<WorkerOption[]>([]);
-  const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
   const [warning, setWarning] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Cargar trabajadores con debounce cuando cambian los municipios
   useEffect(() => {
-    if (municipalities.length === 0) {
-      setOptions([]);
-      setSelectedOptions([]);
-      setIsLoading(false);
-      setError(null);
-      return;
-    }
-
     let cancelled = false;
     setIsLoading(true);
     setError(null);
 
-    const timer = window.setTimeout(async () => {
-      try {
-        const workers = await mapsService.getWorkersByMunicipalities(municipalities);
+    mapsService
+      .getWorkers()
+      .then((workers) => {
         if (cancelled) return;
-
-        const workerOptions: WorkerOption[] = workers.map(worker => ({
+        const workerOptions: WorkerOption[] = workers.map((worker) => ({
           value: worker.id.toString(),
-          label: `${worker.name || ''} ${worker.ape_1 || ''} ${worker.ape_2 || ''} (${worker.cif || ''})`
+          label: `${worker.name || ''} ${worker.ape_1 || ''} ${worker.ape_2 || ''} (${worker.cif || ''})`,
         }));
-
         setOptions(workerOptions);
-      } catch (err) {
+      })
+      .catch((err) => {
         if (cancelled) return;
         console.error('Error al cargar trabajadores:', err);
         setError('Error al cargar la lista de trabajadores');
         setOptions([]);
-      } finally {
-        if (!cancelled) {
-          setIsLoading(false);
-        }
-      }
-    }, WORKERS_DEBOUNCE_MS);
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoading(false);
+      });
 
     return () => {
       cancelled = true;
-      window.clearTimeout(timer);
     };
-  }, [municipalities]);
+  }, []);
 
+  const selectedOptions = useMemo(
+    () => options.filter((option) => selectedIds.includes(option.value)),
+    [options, selectedIds]
+  );
 
-  // Pasar los IDs de trabajadores seleccionados al componente padre
-  useEffect(() => {
-    onFilterChange(selectedOptions.map(option => option.value));
-  }, [selectedOptions, onFilterChange]);
-
-  // Manejar cambios en la selección
   const handleSelectChange = (newValue: MultiValue<WorkerOption>) => {
     if (newValue.length > 12) {
-      setWarning('⚠ Solo puedes seleccionar hasta 12 trabajadores.');
-      return; // No actualiza la selección
+      setWarning('Máximo 12 trabajadoras.');
+      return;
     }
     setWarning(null);
-    setSelectedOptions(newValue);
+    onFilterChange(newValue.map((option) => option.value));
   };
 
-  // Personalizar la visualización de cada opción
   const formatOptionLabel = (option: WorkerOption) => (
     <div style={{ display: 'flex', flexDirection: 'column' }}>
       <span>{option.label}</span>
@@ -90,26 +69,25 @@ const WorkerSelector: React.FC<WorkerSelectorProps> = ({ onFilterChange, municip
   );
 
   return (
-    <div className='WorkerSelector-container'>
+    <div className="WorkerSelector-container">
       <Select
-        isDisabled={municipalities.length === 0}
         options={options}
         isMulti
         isLoading={isLoading}
-        placeholder={isLoading ? "Cargando trabajadores..." : "Selecciona trabajadores..."}
-        noOptionsMessage={() => error || "No hay trabajadores disponibles"}
+        isSearchable
+        placeholder={isLoading ? 'Cargando trabajadoras...' : 'Selecciona trabajadoras...'}
+        noOptionsMessage={() => error || 'No hay trabajadoras disponibles'}
         formatOptionLabel={formatOptionLabel}
-        className='basic-multi-select'
-        classNamePrefix='select'
+        className="basic-multi-select"
+        classNamePrefix="select"
         onChange={handleSelectChange}
         value={selectedOptions}
+        menuPortalTarget={typeof document !== 'undefined' ? document.body : null}
+        menuPosition="fixed"
+        styles={{ menuPortal: (base) => ({ ...base, zIndex: 1500 }) }}
       />
-      {warning && (
-        <p className="warning-message">{warning}</p>
-      )}
-      {error && (
-        <p className="error-message">{error}</p>
-      )}
+      {warning && <p className="warning-message">{warning}</p>}
+      {error && <p className="error-message">{error}</p>}
     </div>
   );
 };

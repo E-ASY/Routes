@@ -10,7 +10,7 @@ const routeService = require('../services/routes');
 const viewportService = require('../services/viewport');
 const { sendServerError } = require('../utils/errors');
 const { parseWorkers, parseMunicipalities } = require('../utils/queryParams');
-const { mapsLimiter, routesLimiter } = require('../middleware/rateLimit');
+const { mapsLimiter, routesLimiter, refreshLimiter } = require('../middleware/rateLimit');
 const logger = require('../utils/logger');
 
 logger.debug('mapRoutes cargado');
@@ -124,6 +124,69 @@ router.get('/viewport', routesLimiter, async (req, res) => {
     res.json(viewport);
   } catch (error) {
     return sendServerError(res, error, 'Error al obtener viewport');
+  }
+});
+
+/**
+ * @route   GET /data-status
+ * @desc    Fecha de última materialización / snapshot (global, sin PII)
+ */
+router.get('/data-status', async (req, res) => {
+  try {
+    res.json(dataService.getDataStatus());
+  } catch (error) {
+    return sendServerError(res, error, 'Error al obtener estado de datos');
+  }
+});
+
+/**
+ * @route   POST /refresh-snapshot
+ * @desc    Regenera datos desde Velneo + snapshot (afecta a todos los usuarios)
+ */
+router.post('/refresh-snapshot', refreshLimiter, async (req, res) => {
+  try {
+    logger.info('POST /refresh-snapshot start');
+    const result = await dataService.refreshSnapshotFromVelneo();
+    try {
+      routeService.clearRouteCache();
+    } catch (cacheErr) {
+      logger.warn(`clearRouteCache: ${cacheErr.message}`);
+    }
+    logger.info(
+      `POST /refresh-snapshot ok workers=${result.workers} municipalities=${result.municipalities}`
+    );
+    res.json({
+      ok: true,
+      updated_at: result.updated_at,
+      workers: result.workers,
+      municipalities: result.municipalities,
+      snapshot: result.health,
+    });
+  } catch (error) {
+    return sendServerError(res, error, 'Error al refrescar datos desde Velneo');
+  }
+});
+
+/**
+ * @route   POST /legs
+ * @desc    Tramos Google entre puntos ordenados (partida + visitas)
+ */
+router.post('/legs', routesLimiter, async (req, res) => {
+  try {
+    const points = req.body?.points;
+    if (!Array.isArray(points) || points.length < 2) {
+      return res.status(400).json({
+        error: 'Se requieren al menos 2 puntos en body.points [{ lat, lon }, ...]',
+      });
+    }
+    logger.debug(`POST /legs points_count=${points.length}`);
+    const result = await routeService.computeLegs(points);
+    res.json(result);
+  } catch (error) {
+    if (error.status === 400) {
+      return res.status(400).json({ error: error.message });
+    }
+    return sendServerError(res, error, 'Error al calcular tramos');
   }
 });
 

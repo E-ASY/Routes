@@ -4,7 +4,7 @@
 **Rama de trabajo:** `routes/fix`  
 **Fecha de auditoría:** 2026-09-07  
 **Alcance:** backend Express/Auth0, frontend React/Vite, consultas a Velneo y Google Routes.  
-**Última actualización de trabajo:** 2026-09-07 (SEC-004 deferred; SEC-014)
+**Última actualización de trabajo:** 2026-09-08 (planificador visitas manual)
 
 ## Registro de avances
 
@@ -43,6 +43,17 @@
 | 2026-09-07 | SEC-017 | Validación Zod de workers/municipalities + tests `node --test` | `utils/queryParams.js`, `tests/queryParams.test.js` | `npm test` → 8 pass |
 | 2026-09-07 | SEC-004 | Diferido: sin RBAC/roles en desarrollo | `issuesbacklok.md` | Retomar al definir scopes en Auth0 tenant |
 | 2026-09-07 | SEC-014 | Eliminado `express-session`; solo cookie OIDC (`AUTH0_SECRET`) | `main.js`, `config.js`, `rateLimit.js` | `SESSION_SECRET` ya no es obligatorio; returnTo vía `/login?returnTo=` |
+| 2026-09-07 | SEC-012 | Investigación: API Rest Velneo **solo** documenta `?api_key=` (sin header) | docs Velneo + `data.js` | Mitigar: HTTPS, no loguear URL (SEC-002), rotar clave; no cerrable en app |
+| 2026-09-07 | SEC-021 | Logout solo POST `/auth/logout` + Origin/Referer allowlist; GET `/logout` off | `auth.js`, `main.js`, `auth.ts`, `redirect.js` | Form POST desde frontend |
+| 2026-09-07 | PERF-012 | Filtros nativos Velneo **v2**: `tip_ser` ser_nom 4\|6 (`index`+`{add}`), `ent_rel_m` `off=0` | `backend/services/data.js`, `.env`→`/v2/`, `.env.example` | v1 ignora params; `ent_m`/`ate_m`/`tra_m` sin multi-id usable → criterio 80% no cerrado (PERF-010) |
+| 2026-09-07 | PERF-010 | Snapshot disco: memoria → disco fresco → Velneo; job `npm run snapshot:refresh` | `snapshotStore.js`, `data.js`, `scripts/refreshSnapshot.js` | TTL 24h; `DATA_SNAPSHOT_*`; S3 = montar/sync en `DATA_SNAPSHOT_DIR`. SEC-002 rotación clave → al final |
+| 2026-09-07 | PERF-010 | **Estrategia de frescura / TTL / cron / S3: pendiente por determinar** | `issuesbacklok.md` | Código prototipo existe; no cerrar hasta decidir SLA (qué pasa si Velneo cambia antes del TTL) |
+| 2026-09-07 | UX | Hover en puntos del mapa: nombre/CIF/municipio usuaria + trabajadora | `data.js`, `map.tsx`, `map_service.ts` | Payload `user*`; tooltip deck.gl; reiniciar backend para vaciar caché/snapshot si hace falta |
+| 2026-09-07 | UX | Kilometraje por trabajadora (suma tramos Google `distanceMeters`) | `routes.js`, `viewport.js`, `legend.tsx`, `main.tsx` | Leyenda `Km: X.X`; orden = array actual (PERF-013 pendiente) |
+| 2026-09-07 | UX | Ubicación trabajadora en mapa (`kind=worker`, marcador mayor + borde) | `data.js`, `routes.js`, `map.tsx`, `legend.tsx` | Coords desde `ate_m`; no entra en tramos Google. Refrescar snapshot/caché |
+| 2026-09-08 | docs | Limitaciones de escalado (usuarios, Velneo, Google, Redis, datos) | `issuesbacklok.md` | Sección dedicada; orientación ~10–30 usuarios / día, pocos concurrentes |
+| 2026-09-08 | UX | Botón **Refrescar datos** + fecha última actualización (global) | `map.js`, `data.js`, `data_refresh.tsx`, rateLimit | `GET /maps/data-status`, `POST /maps/refresh-snapshot`; max 2/15 min; limpia rutas Google |
+| 2026-09-08 | UX / PERF-013 | Planificador visitas: partida + orden 1…N + km tramos | `routes.js` `POST /legs`, `map.tsx`, `visit_plan_panel.tsx`, `main.tsx` | Partida mapa/usuaria/trabajadora; editar/limpiar; sin TSP |
 
 ### Verificación realizada / pendiente
 
@@ -69,10 +80,76 @@
 
 | Área | Evidencia |
 |------|-----------|
-| Cold start Velneo | `ent_m` ≈ 17 767 registros / 178 páginas; `ent_rel_m` ≈ 17 357 / 174 páginas; ~350–450 HTTP requests por cache miss |
-| Dependencias backend | `npm audit`: **16** vulns (`1 critical`, `8 high`, `5 moderate`, `2 low`) |
-| Dependencias frontend | `npm audit`: **33** vulns (`1 critical`, `18 high`, `11 moderate`, `3 low`) |
-| Duplicación UI | múltiples `GET /maps/municipalities`; al seleccionar trabajadores: `/points` + `/routes` + `/workers` |
+| Cold start Velneo | `ent_m` ≈ 17 7xx; `ent_rel_m` ≈ 17 3xx; `ate_m` ≈ 10 k; `tra_m` ≈ 16 k; `tip_ser` 2520 → **1407** con filtro v2; `ent_rel` activo ≈ 9919. Decenas–cientos de páginas HTTP por cache miss |
+| UI → backend (post PERF-006/007) | Municipios 1×/sesión; workers con debounce 400 ms; **1** `GET /maps/viewport` al elegir trabajadoras |
+| Filtros Velneo | Solo efectivos en **API v2**; v1 ignora `index`/`filterQuery`. Multi-`id` documentado **no** funciona en esta instancia |
+| Coords trabajadoras | ~583 con `es_tra_sim=1`; solo **~7** con `ate_m` lat/lon ≠ 0; resto `0,0` → no se pintan en mapa |
+| Dependencias | Audits históricos en auditoría inicial; re-ejecutar `npm audit` al publicar |
+
+---
+
+# Limitaciones de escalado (tener en cuenta)
+
+Documento vivo: hallazgos de Fase 0–3 parciales. **No** sustituye un load test; orienta capacidad y siguientes inversiones (PERF-010/011/013).
+
+## Capacidad de usuarios (orientativa, 1 instancia)
+
+| Escenario | Orden de magnitud | Notas |
+|-----------|-------------------|--------|
+| Uso interno típico | **~10–30** usuarios a lo largo del día; **3–8** concurrentes | Caché/snapshot caliente; viewport + Google ya cacheados |
+| Caché caliente, poca Google fría | **~15–25** sesiones activas | Express aguanta; el cuello no es el JSON de `/maps` |
+| Varios viewport con rutas nuevas a la vez | **~5–10** concurrentes | Latencia y cuota **Google Routes** |
+| Cold start Velneo | **1 proceso** regenera (single-flight); resto espera en la misma instancia | Varias instancias **sin Redis** → N cold starts |
+
+Rate limit por defecto (`RATE_LIMIT_*`): ~60/min maps, ~**20**/min routes+viewport por IP+usuario. Un usuario normal no lo agota; uso agresivo o bots sí.
+
+**Importante:** cuentas Auth0 ≠ concurrentes. Importa cuántos cargan mapa/rutas a la vez.
+
+## Cuellos de botella externos
+
+### Velneo
+- Cold start sigue siendo **caro** (tablas grandes). Filtros nativos solo en **v2** y solo en `tip_ser` (4\|6) + `ent_rel_m` (off=0). `ent_m` / `ate_m` / `tra_m` casi enteras.
+- **N+1 por id** (~200 ms/id) descartado: miles de requests/cold start.
+- API key solo en query string (**SEC-012 blocked**): HTTPS + no loguear URL + rotar clave (SEC-002).
+- Snapshot/disco (**PERF-010**): estrategia de frescura **pendiente por determinar** (TTL vs stale si cambian datos en Velneo).
+
+### Google Routes
+- 1 llamada HTTP por **tramo** consecutivas usuaria→usuaria (orden = array actual, no TSP → **PERF-013**).
+- Caché tramo/trabajadora ~1 h en memoria del proceso; no compartida entre instancias.
+- Kilometraje = suma `distanceMeters` de esos tramos; refleja el orden actual, no el óptimo.
+
+### Caché local (sin Redis)
+- `NodeCache` + snapshot en disco = **por máquina**. Multi-dyno / multi-réplica → cada una paga Velneo/Google hasta **PERF-011 (Redis)** o volumen compartido.
+- Redeploy sin volumen persistente puede perder snapshot → otro cold start.
+
+## Límites de producto / datos
+
+| Límite | Valor / hecho |
+|--------|----------------|
+| Trabajadoras por viewport | UI ~12; API `MAX_WORKERS` default 20 |
+| Municipios por query | `MAX_MUNICIPALITIES` default 50 |
+| Punto rojo trabajadora | Solo si hay coords válidas en `ate_m` (~1 % hoy) |
+| RBAC por roles | **SEC-004 deferred** (sin roles Auth0 en dev) |
+| Frescura datos | Hasta TTL snapshot/memoria sin ver cambios Velneo |
+
+## Qué hacer al crecer
+
+1. Cerrar decisión **PERF-010** (SLA frescura + cron/S3 si aplica).
+2. Si **>1 instancia** o picos concurrentes: **PERF-011 Redis** (processed_data + rutas).
+3. Si coste/km o cuota Google: **PERF-013** (orden) + vigilar métricas `google_routes_calls`.
+4. Completar coords trabajadoras en Velneo si el mapa de “base” es requisito.
+5. Load test real (10 / 25 / 50 viewport concurrentes) antes de afirmar SLAs públicos.
+
+## Patrón de tráfico UI (referencia)
+
+```
+AuthGuard → GET /auth/check
+App load  → GET /maps/municipalities   (caché cliente)
+Municipios → GET /maps/workers?...     (debounce 400 ms)
+Trabajadoras → GET /maps/viewport?...  (points + routes + mileage + workers)
+```
+
+No hay polling. El coste variable es **viewport** (datos + Google si miss de caché de rutas).
 
 ---
 
@@ -91,7 +168,7 @@
 | SEC-009 | P1 | `trust proxy` y cookies detrás de reverse proxy | Seguridad | done (código) |
 | SEC-010 | P1 | No almacenar `id_token` en sesión sin uso | Seguridad | done (código) |
 | SEC-011 | P1 | Actualizar dependencias vulnerables (backend) | Seguridad | done (código) |
-| SEC-012 | P2 | API key Velneo fuera del query string | Seguridad | open |
+| SEC-012 | P2 | API key Velneo fuera del query string | Seguridad | blocked (API Velneo no documenta header) |
 | SEC-013 | P2 | CORS dinámico por entorno | Seguridad | done (código) |
 | SEC-014 | P2 | Unificar sistema de sesiones | Seguridad | done (código) |
 | SEC-015 | P2 | Secreto OIDC separado del client secret | Seguridad | done (código) |
@@ -100,7 +177,7 @@
 | SEC-018 | P2 | DTO mínimo en `/auth/check` | Seguridad | done (código) |
 | SEC-019 | P2 | Fail-fast de variables de entorno | Seguridad | done (código) |
 | SEC-020 | P2 | Auditar / actualizar dependencias frontend | Seguridad | done (código) |
-| SEC-021 | P3 | Logout CSRF (GET) | Seguridad | open |
+| SEC-021 | P3 | Logout CSRF (GET) | Seguridad | done (código) |
 | SEC-022 | P2 | Eliminar logs verbosos con PII | Seguridad | done (código) |
 | SEC-023 | P2 | Eliminar dependencias no usadas | Seguridad | done (código) |
 | PERF-001 | P1 | Single-flight / anti cache stampede | Rendimiento | done (código) |
@@ -112,9 +189,9 @@
 | PERF-007 | P2 | Caché cliente + debounce selectores | Rendimiento | done (código) |
 | PERF-008 | P2 | Google Routes: timeout, backoff, cuota | Rendimiento | done (código) |
 | PERF-009 | P2 | Baseline y observabilidad mínima | Rendimiento | done (código) |
-| PERF-010 | P3 | ETL diario / almacenamiento persistente | Escalado | open |
+| PERF-010 | P3 | ETL diario / almacenamiento persistente | Escalado | open — estrategia pendiente por determinar (código prototipo) |
 | PERF-011 | P3 | Caché compartida (Redis) | Escalado | open |
-| PERF-012 | P3 | Filtros nativos en Velneo | Escalado | open |
+| PERF-012 | P3 | Filtros nativos en Velneo | Escalado | done parcial (código; ver notas) |
 | PERF-013 | P3 | Optimización de orden de rutas (TSP / Route Optimization) | Escalado | open |
 
 ---
@@ -249,12 +326,14 @@
 
 | Campo | Detalle |
 |-------|---------|
-| **Estado** | open |
-| **Evidencia** | [`backend/services/data.js:25`](backend/services/data.js) |
-| **Impacto** | Clave en logs de proxies / historial de requests. |
-| **Solución** | Header de autenticación si Velneo lo soporta; rotación periódica. |
+| **Estado** | blocked — 2026-09-07 (capacidad API) |
+| **Evidencia** | Código: `?api_key=` en `data.js`. Docs oficiales Velneo vERP ApiRest: autenticación solo como query `api_key` ([doc.velneo.com](https://doc.velneo.com/velneo-verp/documentacion-del-apirest)); ejemplos Swagger idénticos. No hay mención de header `Authorization` / `X-Api-Key`. |
+| **Impacto** | Clave en URL → logs de proxies / historial si alguien loguea la request completa. |
+| **Conclusión** | **No viable** mover la key a header sin cambio en Velneo/vModApache. |
+| **Mitigaciones** | (1) HTTPS obligatorio (Velneo lo recomienda). (2) No loguear URL (SEC-002, hecho). (3) Rotar `VELNEO_API_KEY` (SEC-002 ops). (4) Permisos mínimos en la API key. |
+| **Alternativa futura** | Proxy/gateway propio que acepte header y reescriba a `?api_key=` hacia Velneo (ocultaría la key al resto de la app, no a la hop final). |
 | **Dependencias** | Capacidades API Velneo; SEC-002 |
-| **Criterio de aceptación** | Captura de red en staging: clave no aparece en query string. |
+| **Criterio de aceptación** | N/A hasta que Velneo soporte header; issue permanece blocked. |
 
 ## SEC-013 — CORS dinámico por entorno (P2)
 
@@ -348,12 +427,12 @@
 
 | Campo | Detalle |
 |-------|---------|
-| **Estado** | open |
-| **Evidencia** | [`frontend/src/services/auth.ts`](frontend/src/services/auth.ts) — navegación a `/logout?returnTo=` |
+| **Estado** | done (código) — 2026-09-07 |
+| **Evidencia** | `POST /auth/logout` + `isAllowedRequestOrigin`; `routes.logout: false` en OIDC |
 | **Impacto** | Sitio externo puede forzar logout (molestia). |
-| **Solución** | POST + CSRF o SameSite estricto + confirmación. |
+| **Solución aplicada** | Frontend envía form POST; backend exige Origin/Referer en allowlist; returnTo validado. |
 | **Dependencias** | SEC-014 |
-| **Criterio de aceptación** | Logout no ejecutable con simple GET cross-site. |
+| **Criterio de aceptación** | GET `/logout` no cierra sesión; POST cross-origin sin Origin permitido → 403. |
 
 ## SEC-022 — Eliminar logs verbosos con PII (P2)
 
@@ -486,12 +565,14 @@
 
 | Campo | Detalle |
 |-------|---------|
-| **Estado** | open |
-| **Evidencia** | Roadmap en [`README.md`](README.md) (repo AWS / horarios baja demanda) |
-| **Impacto** | Elimina cold start de usuario frente a Velneo. |
-| **Solución** | Job nocturno materializa vistas (`municipalities`, `workers_by_muni`, `points_by_worker`). |
-| **Dependencias** | Infra AWS; SLA de frescura de datos |
-| **Criterio de aceptación** | ≥99% requests servidos desde almacenamiento local; cold start usuario medido < 2 s (post-infra). |
+| **Estado** | **open — estrategia pendiente por determinar** (código prototipo en repo) — 2026-09-07 |
+| **Evidencia** | Roadmap README (S3). Prototipo: vistas en disco `processed.json` + `municipalities.json` + `meta.json`. Lectura: memoria → snapshot fresco → Velneo. Escritura tras cold start Velneo y vía CLI. |
+| **Impacto** | Con TTL actual, cambios en Velneo **no se ven** hasta caducar el snapshot o forzar refresh. |
+| **Solución aplicada (prototipo)** | [`snapshotStore.js`](backend/services/snapshotStore.js); [`data.js`](backend/services/data.js); job [`npm run snapshot:refresh`](backend/scripts/refreshSnapshot.js). Env: `DATA_SNAPSHOT_*`. `/health` → `snapshot`. |
+| **Pendiente por determinar (decisión)** | 1) SLA de frescura (TTL vs casi tiempo real). 2) Invalidación si cambian datos en Velneo antes del TTL (¿aceptar stale, refresh manual, cron, webhook?). 3) Cron sí/no en prod. 4) Disco local vs S3/volumen vs Redis (PERF-011). 5) Quién dispara el refresh (primer usuario vs job). |
+| **Dependencias** | Decisión de producto/ops anterior; luego infra |
+| **Criterio de aceptación** | Tras fijar estrategia: ≥99% lecturas desde store acordado + cold start medido; comportamiento ante datos stale documentado y aceptado. |
+| **Notas** | No dar por cerrado PERF-010 hasta esa decisión. SEC-002 (rotar clave) → al final. Snapshots pueden contener PII → gitignored. |
 
 ## PERF-011 — Caché compartida (Redis) (P3)
 
@@ -508,12 +589,13 @@
 
 | Campo | Detalle |
 |-------|---------|
-| **Estado** | open |
-| **Evidencia** | Descarga completa de tablas y filtro en memoria |
-| **Impacto** | ~17k registros innecesarios por tabla. |
-| **Solución** | Query params / filtros server-side (`ser_nom`, `mun_m`, `es_tra_sim`). |
-| **Dependencias** | Documentación API Velneo |
-| **Criterio de aceptación** | Volumen descargado reducido > 80% vs baseline documentado. |
+| **Estado** | done parcial (código) — 2026-09-07 |
+| **Evidencia** | **v1** (`.../v1/`): `index` / `filterQuery` se **ignoran** (p. ej. `tip_ser` sigue en 2520). **v2** (`.../v2/`): filtros efectivos. Baseline aprox. filas: `ent_m` 17774, `ate_m` 10474, `ent_rel_m` 17361, `tip_ser` 2520, `tra_m` 16072, `mun_m` 89. Tras filtros: `tip_ser` **1407** (`index[ser_nom]=4` + `index[ser_nom{add}]=6`), `ent_rel_m` **9919** (`filterQuery[off]=0`). `filterQuery[es_tra_sim]=1` → 582 trabajadoras, pero el pipeline también necesita usuarias (`es_tra_sim=false`); `index[id]=1, 3, 5` **no** multi-id en esta instancia; `tra_m`/`ate_m` sin filtro útil (`hor_spapd`, `tip_ser`). Swagger con API key: `paths: {}`. |
+| **Impacto** | Menos páginas en `tip_ser` (~44%) y `ent_rel_m` (~43%). Tablas grandes (`ent_m`, `ate_m`, `tra_m`) siguen completas → **no** se cumple el criterio >80% de volumen total. |
+| **Solución aplicada** | `VELNEO_API_BASE_URL` a **v2**; en `data.js` params `tipSerInterestParams()` / `entRelActiveParams()` si la URL es v2; log warn si sigue en v1. Misma lógica en carga ligera de municipios. |
+| **Dependencias** | URL v2 en env; más reducción → búsquedas/procesos Velneo o PERF-010 ETL |
+| **Criterio de aceptación** | Volumen descargado reducido > 80% vs baseline → **no cumplido** a nivel suma de tablas. Cumplido en tablas filtrables (`tip_ser`, `ent_rel_m`). |
+| **Notas** | No enviar filtros “decorativos” en v1 (dan falsa sensación de ahorro). N+1 por `filterQuery[id]` (~200 ms/id) reduce filas pero dispara miles de requests/cold start — descartado. |
 
 ## PERF-013 — Optimización de orden de rutas (P3)
 
@@ -644,9 +726,9 @@ curl -i -H "Origin: https://evil.com" -X OPTIONS http://localhost:5000/maps/muni
 
 | Orden | Issue | Condición |
 |-------|-------|-----------|
-| 1 | PERF-010 | Infra + SLA |
+| 1 | PERF-010 | **Estrategia pendiente por determinar** (TTL/stale/cron/S3); prototipo disco ya en código |
 | 2 | PERF-011 | Multi-instancia |
-| 3 | PERF-012 | API Velneo con filtros |
+| 3 | PERF-012 | API Velneo v2 + filtros parciales (hecho); resto vía ETL/búsquedas |
 | 4 | PERF-013 | Reglas de orden de visitas |
 | 5 | SEC-021 | Tras unificar sesiones |
 
@@ -693,3 +775,4 @@ curl -i -H "Origin: https://evil.com" -X OPTIONS http://localhost:5000/maps/muni
 3. No dar por cerrado un P0/P1 sin ejecutar las pruebas de la fase.
 4. Tras SEC-002, rotar secretos expuestos **antes** de considerar el issue cerrado.
 5. Medir baseline con PERF-009 antes de afirmar mejoras de latencia.
+6. Antes de escalar instancias o usuarios: releer **Limitaciones de escalado** (arriba).

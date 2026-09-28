@@ -1,24 +1,27 @@
 import { apiRequest } from './config';
 
 /**
- * Representa un punto geográfico en el mapa con información del trabajador asociado
+ * Punto geográfico: ubicación de una usuaria, coloreado por trabajadora asignada.
  * @interface MapPoint
- * @property {number} lat - Latitud del punto
- * @property {number} lon - Longitud del punto
- * @property {string|number} id - Identificador del trabajador asociado al punto
- * @property {string} workerName - Nombre del trabajador
- * @property {string} workerApe1 - Primer apellido del trabajador
- * @property {string} workerApe2 - Segundo apellido del trabajador
- * @property {string} workerCif - CIF/Identificador fiscal del trabajador
  */
 export interface MapPoint {
     lat: number;
     lon: number;
+    /** ID de la trabajadora (color / leyenda) */
     id: string | number;
+    /** user = usuaria atendida; worker = ubicación de la trabajadora */
+    kind?: 'user' | 'worker';
+    userId?: string | number;
+    userName?: string;
+    userApe1?: string;
+    userApe2?: string;
+    userCif?: string;
+    userMunId?: string | number | null;
     workerName: string;
     workerApe1: string;
     workerApe2: string;
     workerCif: string;
+    workerDisponibilidad?: number;
   }
 
 export interface Municipality {
@@ -57,13 +60,24 @@ export interface RouteData {
   routes: Array<any>;
   workers: Record<string, any[]>;
   total: number;
+  mileage_by_worker?: MileageByWorker;
 }
+
+export interface WorkerMileage {
+  distance_m: number;
+  distance_km: number;
+  legs: number;
+  legs_with_distance: number;
+}
+
+export type MileageByWorker = Record<string, WorkerMileage>;
 
 /** PERF-006: respuesta agregada points + routes + workers (leyenda) */
 export interface ViewportData {
   workers: Worker[];
   points: MapPoint[];
   routes: Array<any>;
+  mileage_by_worker?: MileageByWorker;
   total_points: number;
   total_routes: number;
 }
@@ -76,6 +90,11 @@ export interface ViewportData {
 /** PERF-007: caché en sesión + dedupe de peticiones concurrentes de municipios */
 let municipalitiesCache: Municipality[] | null = null;
 let municipalitiesInFlight: Promise<Municipality[]> | null = null;
+
+function clearMunicipalitiesClientCache() {
+  municipalitiesCache = null;
+  municipalitiesInFlight = null;
+}
 
 export const mapsService = {
   /**
@@ -156,5 +175,77 @@ export const mapsService = {
   async getWorkersById(workerIds: string[]): Promise<Worker[]> {
     const queryParams = workerIds.map(id => `workers=${encodeURIComponent(id)}`).join('&');
     return apiRequest<Worker[]>(`/maps/workers?${queryParams}`);
-  }
+  },
+
+  /** Estado global de frescura del snapshot / datos Velneo */
+  async getDataStatus(): Promise<DataStatus> {
+    return apiRequest<DataStatus>('/maps/data-status');
+  },
+
+  /** Regenera snapshot desde Velneo (afecta a todos). Puede tardar. */
+  async refreshSnapshot(): Promise<RefreshSnapshotResult> {
+    const result = await apiRequest<RefreshSnapshotResult>('/maps/refresh-snapshot', {
+      method: 'POST',
+      body: '{}',
+    });
+    clearMunicipalitiesClientCache();
+    return result;
+  },
+
+  /** Tramos ordenados (partida + visitas) vía Google Routes */
+  async computeLegs(points: LatLon[]): Promise<LegsResult> {
+    return apiRequest<LegsResult>('/maps/legs', {
+      method: 'POST',
+      body: JSON.stringify({ points }),
+    });
+  },
 };
+
+export interface DataStatus {
+  updated_at: string | null;
+  snapshot_fresh: boolean;
+  snapshot_enabled: boolean;
+  processed_data_cached: boolean;
+  refresh_in_flight: boolean;
+}
+
+export interface RefreshSnapshotResult {
+  ok: boolean;
+  updated_at: string | null;
+  workers: number;
+  municipalities: number;
+}
+
+export interface LatLon {
+  lat: number;
+  lon: number;
+}
+
+export interface RouteLeg {
+  from_index: number;
+  to_index: number;
+  origin: LatLon;
+  destination: LatLon;
+  polyline: number[][] | null;
+  distance_m: number | null;
+  distance_km: number | null;
+}
+
+export interface LegsResult {
+  legs: RouteLeg[];
+  total_distance_m: number;
+  total_distance_km: number;
+  legs_with_distance?: number;
+  points_count: number;
+}
+
+/** Punto de partida o visita en el planificador */
+export interface VisitPlanPoint {
+  lat: number;
+  lon: number;
+  label: string;
+  /** Si viene de un MapPoint */
+  sourceKind?: 'user' | 'worker' | 'map';
+  userId?: string | number;
+  mapPointId?: string | number;
+}

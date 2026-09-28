@@ -55,16 +55,23 @@ export const authService = {
   },
 
   /**
-   * Redirige al usuario a la página de logout de Auth0
-   * Cierra la sesión en Auth0 y redirige de vuelta al frontend
-   * @returns {void}
+   * SEC-021: logout vía POST (form) + Origin allowlist en backend.
+   * Evita CSRF por simple GET cross-site a /logout.
    */
   logout(): void {
-    // CORRECCIÓN: Usar la ruta API para cerrar sesión en lugar de la ruta directa
-    const returnTo = encodeURIComponent(FRONTEND_URL);
-    
-    // Usar la ruta de API en lugar de la ruta directa de Auth0
-    window.location.href = `${BACKEND_URL}/logout?returnTo=${returnTo}`;
+    const form = document.createElement('form');
+    form.method = 'POST';
+    form.action = `${BACKEND_URL}/auth/logout`;
+    form.style.display = 'none';
+
+    const input = document.createElement('input');
+    input.type = 'hidden';
+    input.name = 'returnTo';
+    input.value = FRONTEND_URL;
+    form.appendChild(input);
+
+    document.body.appendChild(form);
+    form.submit();
   },
 
   /**

@@ -1,51 +1,18 @@
 import React, { useEffect, useState } from 'react';
 import { authService, AuthUser } from '../../services/auth';
-import UserInfoPanel from '../user_info';
-import { 
-  Box, 
-  Button, 
+import { AuthSessionProvider } from './session_context';
+import {
+  Box,
+  Button,
   Card,
   CardContent,
-  CircularProgress, 
+  CircularProgress,
   Fade,
   ThemeProvider,
   Typography,
-  createTheme
 } from '@mui/material';
 import { Login as LoginIcon } from '@mui/icons-material';
-
-// Create a custom theme
-const theme = createTheme({
-  palette: {
-    primary: {
-      main: '#2196F3',
-      light: '#64B5F6',
-      dark: '#1976D2',
-    },
-    secondary: {
-      main: '#FF4081',
-    },
-  },
-  typography: {
-    fontFamily: '"Roboto", "Helvetica", "Arial", sans-serif',
-    h4: {
-      fontWeight: 600,
-    },
-    button: {
-      textTransform: 'none',
-      fontWeight: 500,
-    },
-  },
-  components: {
-    MuiButton: {
-      styleOverrides: {
-        root: {
-          borderRadius: 8,
-        },
-      },
-    },
-  },
-});
+import { theme } from '../../theme';
 
 interface AuthGuardProps {
   children: React.ReactNode;
@@ -80,63 +47,63 @@ const AuthGuard: React.FC<AuthGuardProps> = ({ children }) => {
   return (
     <ThemeProvider theme={theme}>
       {isLoading ? (
-        <Box 
+        <Box
+          className="AuthScreen"
           sx={{
             height: '100vh',
             display: 'flex',
             flexDirection: 'column',
             justifyContent: 'center',
             alignItems: 'center',
-            background: 'linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%)'
           }}
         >
-          <CircularProgress size={60} thickness={4} />
-          <Typography variant="h6" sx={{ mt: 3, fontWeight: 'medium', color: '#3f51b5' }}>
-            Verificando autenticación...
+          <CircularProgress size={36} thickness={3} color="primary" />
+          <Typography variant="body2" sx={{ mt: 2.5, color: 'text.secondary' }}>
+            Verificando sesión…
           </Typography>
         </Box>
       ) : !isAuthenticated ? (
-        <Box 
+        <Box
+          className="AuthScreen"
           sx={{
             height: '100vh',
             display: 'flex',
             flexDirection: 'column',
             justifyContent: 'center',
             alignItems: 'center',
-            background: 'linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%)'
+            px: 2,
           }}
         >
-          <Fade in={true} timeout={800}>
-            <Card 
-              elevation={8} 
-              sx={{ 
-                maxWidth: 400, 
-                width: '90%',
-                borderRadius: 3, 
-                overflow: 'hidden',
-                boxShadow: '0 10px 30px rgba(0,0,0,0.1)'
+          <Fade in={true} timeout={500}>
+            <Card
+              elevation={0}
+              sx={{
+                maxWidth: 360,
+                width: '100%',
+                borderRadius: '18px',
+                border: '1px solid rgba(20, 50, 60, 0.1)',
+                backgroundImage:
+                  'linear-gradient(165deg, rgba(242, 248, 245, 0.95) 0%, rgba(224, 236, 232, 0.98) 100%)',
+                boxShadow: '0 20px 48px rgba(12, 32, 38, 0.14)',
               }}
             >
-              <Box 
-                sx={{ 
-                  bgcolor: 'primary.main', 
-                  py: 3, 
-                  display: 'flex', 
-                  justifyContent: 'center',
-                  alignItems: 'center',
-                  color: 'white'
-                }}
-              >
-                <Typography variant="h4" align="center">
-                  Bienvenido
+              <Box sx={{ px: 3, pt: 3.5, pb: 0.5 }}>
+                <Typography
+                  variant="overline"
+                  sx={{ letterSpacing: '0.16em', color: 'secondary.dark', fontWeight: 700 }}
+                >
+                  ACUFADE
+                </Typography>
+                <Typography variant="h4" sx={{ mt: 0.35, fontSize: '1.85rem', color: 'primary.main' }}>
+                  Routes
                 </Typography>
               </Box>
-              
-              <CardContent sx={{ py: 4, px: 3 }}>
-                <Typography variant="body1" align="center" sx={{ mb: 4 }}>
-                  Es necesario iniciar sesión para acceder al sistema.
+
+              <CardContent sx={{ pt: 1.5, px: 3, pb: 3.25 }}>
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 2.75, lineHeight: 1.55 }}>
+                  Inicia sesión para ver el mapa y planificar visitas.
                 </Typography>
-                
+
                 <Button
                   variant="contained"
                   color="primary"
@@ -144,15 +111,7 @@ const AuthGuard: React.FC<AuthGuardProps> = ({ children }) => {
                   fullWidth
                   startIcon={<LoginIcon />}
                   onClick={() => authService.login()}
-                  sx={{ 
-                    py: 1.5,
-                    boxShadow: '0 4px 12px rgba(33, 150, 243, 0.4)',
-                    '&:hover': {
-                      boxShadow: '0 6px 14px rgba(33, 150, 243, 0.6)',
-                      transform: 'translateY(-1px)'
-                    },
-                    transition: 'all 0.2s ease-in-out'
-                  }}
+                  sx={{ py: 1.25 }}
                 >
                   Iniciar sesión
                 </Button>
@@ -161,20 +120,19 @@ const AuthGuard: React.FC<AuthGuardProps> = ({ children }) => {
           </Fade>
         </Box>
       ) : (
-        <>
-          <Box 
-            className="relative" 
-            sx={{ 
-              width: '100%', 
+        <AuthSessionProvider value={{ user, onLogout: handleLogout }}>
+          <Box
+            className="relative"
+            sx={{
+              width: '100%',
               height: '100%',
               minHeight: '100vh',
-              bgcolor: 'background.default'
+              bgcolor: 'transparent',
             }}
           >
             {children}
           </Box>
-          <UserInfoPanel user={user} onLogout={handleLogout} />
-        </>
+        </AuthSessionProvider>
       )}
     </ThemeProvider>
   );

@@ -86,6 +86,56 @@ function samePoint(origin, destination) {
 }
 
 /**
+ * Normaliza resultado de tramo (caché antigua = solo array polyline).
+ * @returns {{ polyline: Array, distanceMeters: number|null }|null}
+ */
+function normalizeRouteResult(value) {
+  if (!value) return null;
+  if (Array.isArray(value)) {
+    return { polyline: value, distanceMeters: null };
+  }
+  if (Array.isArray(value.polyline)) {
+    return {
+      polyline: value.polyline,
+      distanceMeters:
+        typeof value.distanceMeters === 'number' && Number.isFinite(value.distanceMeters)
+          ? value.distanceMeters
+          : null,
+    };
+  }
+  return null;
+}
+
+/**
+ * Totales de km por trabajadora a partir de tramos.
+ * @param {Array} routes
+ */
+function buildMileageByWorker(routes) {
+  const byWorker = {};
+  for (const route of routes || []) {
+    const workerId = String(route.worker_id);
+    if (!byWorker[workerId]) {
+      byWorker[workerId] = {
+        distance_m: 0,
+        distance_km: 0,
+        legs: 0,
+        legs_with_distance: 0,
+      };
+    }
+    const entry = byWorker[workerId];
+    entry.legs += 1;
+    if (typeof route.distance_m === 'number' && Number.isFinite(route.distance_m)) {
+      entry.distance_m += route.distance_m;
+      entry.legs_with_distance += 1;
+    }
+  }
+  for (const entry of Object.values(byWorker)) {
+    entry.distance_km = Math.round((entry.distance_m / 1000) * 10) / 10;
+  }
+  return byWorker;
+}
+
+/**
  * POST a Google Routes con retry ante 429/503/timeout (PERF-008).
  */
 async function postGoogleRoute(requestBody) {
@@ -97,7 +147,7 @@ async function postGoogleRoute(requestBody) {
         headers: {
           'Content-Type': 'application/json',
           'X-Goog-Api-Key': GOOGLE_API_KEY,
-          'X-Goog-FieldMask': 'routes.polyline'
+          'X-Goog-FieldMask': 'routes.polyline,routes.distanceMeters'
         },
         timeout: GOOGLE_TIMEOUT_MS
       });
@@ -130,6 +180,7 @@ async function postGoogleRoute(requestBody) {
 
 /**
  * Obtiene una ruta desde Google Routes API o de la caché.
+ * Devuelve { polyline, distanceMeters } o null.
  * No cachea fallos (null) para no bloquear reintentos tras arreglar la API key.
  */
 async function getRouteFromGoogle(origin, destination) {
@@ -139,8 +190,8 @@ async function getRouteFromGoogle(origin, destination) {
     }
 
     const routeKey = generateRouteKey(origin, destination);
-    const cached = routeCache.get(routeKey);
-    if (cached !== undefined) {
+    const cached = normalizeRouteResult(routeCache.get(routeKey));
+    if (cached) {
       logger.debug('Usando ruta en caché');
       return cached;
     }
@@ -179,7 +230,16 @@ async function getRouteFromGoogle(origin, destination) {
 
       const response = await postGoogleRoute(requestBody);
       if (response.data.routes && response.data.routes.length > 0) {
-        return response.data.routes[0].polyline.geoJsonLinestring.coordinates;
+        const route = response.data.routes[0];
+        const polyline = route.polyline?.geoJsonLinestring?.coordinates;
+        if (!Array.isArray(polyline) || polyline.length === 0) {
+          return null;
+        }
+        const distanceMeters =
+          typeof route.distanceMeters === 'number' && Number.isFinite(route.distanceMeters)
+            ? route.distanceMeters
+            : null;
+        return { polyline, distanceMeters };
       }
       return null;
     };
@@ -213,7 +273,10 @@ function prepareRoutePoints(points) {
     return [];
   }
 
-  const pointsByWorker = points.reduce((acc, point) => {
+  // Solo tramos entre usuarias; la ubicación de la trabajadora no entra en la ruta
+  const routeEligible = points.filter((point) => point.kind !== 'worker');
+
+  const pointsByWorker = routeEligible.reduce((acc, point) => {
     const workerIdStr = String(point.id);
     if (!acc[workerIdStr]) {
       acc[workerIdStr] = [];
@@ -246,26 +309,32 @@ function prepareRoutePoints(points) {
 async function getRoutesForWorkers(workers, options = {}) {
   try {
     if (!workers || workers.length === 0) {
-      return { routes: [], workers: {}, total: 0 };
+      return { routes: [], workers: {}, total: 0, mileage_by_worker: {} };
     }
 
     const cachedWorkers = [];
     const workersToFetch = [];
+    let workerRoutes = [];
     workers.forEach((worker) => {
       const workerId = String(worker);
-      if (workerRoutesCache.has(workerId)) {
-        cachedWorkers.push(workerId);
-      } else {
+      const cachedRoutes = workerRoutesCache.get(workerId);
+      if (!cachedRoutes) {
         workersToFetch.push(workerId);
+        return;
       }
-    });
-
-    let workerRoutes = [];
-    cachedWorkers.forEach((worker) => {
-      const cachedRoutes = workerRoutesCache.get(worker);
-      if (cachedRoutes) {
-        workerRoutes = [...workerRoutes, ...cachedRoutes];
+      // Caché antigua sin distance_m: recalcular tramos para kilometraje
+      const needsDistance = cachedRoutes.some(
+        (r) =>
+          Array.isArray(r.polyline) &&
+          r.polyline.length > 0 &&
+          typeof r.distance_m !== 'number'
+      );
+      if (needsDistance) {
+        workersToFetch.push(workerId);
+        return;
       }
+      cachedWorkers.push(workerId);
+      workerRoutes = [...workerRoutes, ...cachedRoutes];
     });
 
     if (workersToFetch.length === 0) {
@@ -275,7 +344,8 @@ async function getRoutesForWorkers(workers, options = {}) {
         workers: Object.fromEntries(
           cachedWorkers.map((worker) => [worker, workerRoutesCache.get(worker)])
         ),
-        total: workerRoutes.length
+        total: workerRoutes.length,
+        mileage_by_worker: buildMileageByWorker(workerRoutes),
       };
     }
 
@@ -292,7 +362,8 @@ async function getRoutesForWorkers(workers, options = {}) {
       return {
         routes: workerRoutes,
         workers: {},
-        total: workerRoutes.length
+        total: workerRoutes.length,
+        mileage_by_worker: buildMileageByWorker(workerRoutes),
       };
     }
 
@@ -305,10 +376,11 @@ async function getRoutesForWorkers(workers, options = {}) {
       const batch = workerRouteRequests.slice(i, i + BATCH_SIZE);
       const batchPromises = batch.map(async (request) => {
         try {
-          const polyline = await getRouteFromGoogle(request.origin, request.destination);
+          const result = await getRouteFromGoogle(request.origin, request.destination);
           const workerRoute = {
             worker_id: request.worker,
-            polyline,
+            polyline: result?.polyline || null,
+            distance_m: result?.distanceMeters ?? null,
             origin: request.origin,
             destination: request.destination
           };
@@ -322,6 +394,7 @@ async function getRoutesForWorkers(workers, options = {}) {
           return {
             worker_id: request.worker,
             polyline: null,
+            distance_m: null,
             origin: request.origin,
             destination: request.destination,
             error: error.message
@@ -358,11 +431,12 @@ async function getRoutesForWorkers(workers, options = {}) {
     return {
       routes: workerRoutes,
       workers: Object.fromEntries([...workerRoutesMap.entries()]),
-      total: workerRoutes.length
+      total: workerRoutes.length,
+      mileage_by_worker: buildMileageByWorker(workerRoutes),
     };
   } catch (error) {
     logger.error('Error al obtener rutas:', error);
-    return { error: error.message, routes: [] };
+    return { error: error.message, routes: [], mileage_by_worker: {} };
   }
 }
 
@@ -371,6 +445,98 @@ function clearRouteCache() {
   workerRoutesCache.clear();
   logger.info('Caché de rutas limpiada');
   return { success: true, message: 'Caché de rutas limpiada correctamente' };
+}
+
+/**
+ * Un tramo entre dos puntos (reutiliza caché Google).
+ * @returns {Promise<{ polyline: Array|null, distance_m: number|null }>}
+ */
+async function getLeg(origin, destination) {
+  if (samePoint(origin, destination)) {
+    return { polyline: null, distance_m: 0 };
+  }
+  const result = await getRouteFromGoogle(origin, destination);
+  if (!result) {
+    return { polyline: null, distance_m: null };
+  }
+  return {
+    polyline: result.polyline,
+    distance_m: result.distanceMeters,
+  };
+}
+
+const MAX_LEG_POINTS = 15;
+
+/**
+ * Calcula tramos consecutivos para un orden de puntos (partida + visitas).
+ * @param {Array<{lat: number, lon: number}>} pointsOrdered
+ */
+async function computeLegs(pointsOrdered) {
+  if (!Array.isArray(pointsOrdered) || pointsOrdered.length < 2) {
+    return {
+      legs: [],
+      total_distance_m: 0,
+      total_distance_km: 0,
+      points_count: pointsOrdered?.length || 0,
+    };
+  }
+  if (pointsOrdered.length > MAX_LEG_POINTS) {
+    const err = new Error(`Máximo ${MAX_LEG_POINTS} puntos (partida + visitas)`);
+    err.status = 400;
+    throw err;
+  }
+
+  const legs = [];
+  let total_distance_m = 0;
+  let legsWithDistance = 0;
+
+  for (let i = 0; i < pointsOrdered.length - 1; i++) {
+    const origin = {
+      lat: Number(pointsOrdered[i].lat),
+      lon: Number(pointsOrdered[i].lon),
+    };
+    const destination = {
+      lat: Number(pointsOrdered[i + 1].lat),
+      lon: Number(pointsOrdered[i + 1].lon),
+    };
+    if (
+      !Number.isFinite(origin.lat) ||
+      !Number.isFinite(origin.lon) ||
+      !Number.isFinite(destination.lat) ||
+      !Number.isFinite(destination.lon)
+    ) {
+      const err = new Error(`Coordenadas inválidas en el punto ${i} o ${i + 1}`);
+      err.status = 400;
+      throw err;
+    }
+
+    const leg = await getLeg(origin, destination);
+    const distance_m = leg.distance_m;
+    if (typeof distance_m === 'number' && Number.isFinite(distance_m)) {
+      total_distance_m += distance_m;
+      legsWithDistance += 1;
+    }
+    legs.push({
+      from_index: i,
+      to_index: i + 1,
+      origin,
+      destination,
+      polyline: leg.polyline,
+      distance_m,
+      distance_km:
+        typeof distance_m === 'number' && Number.isFinite(distance_m)
+          ? Math.round((distance_m / 1000) * 10) / 10
+          : null,
+    });
+  }
+
+  return {
+    legs,
+    total_distance_m,
+    total_distance_km: Math.round((total_distance_m / 1000) * 10) / 10,
+    legs_with_distance: legsWithDistance,
+    points_count: pointsOrdered.length,
+  };
 }
 
 function getMetrics() {
@@ -385,4 +551,8 @@ module.exports = {
   getRoutesForWorkers,
   clearRouteCache,
   getMetrics,
+  buildMileageByWorker,
+  getLeg,
+  computeLegs,
+  MAX_LEG_POINTS,
 };

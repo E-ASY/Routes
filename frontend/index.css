@@ -1,3 +1,21 @@
+:root {
+  --ink: #14323c;
+  --ink-soft: #2a5160;
+  --sage: #2f7a6a;
+  --mist: #d8e4e1;
+  --foam: #e8f0ed;
+  --text: #12262e;
+  --muted: #4d646c;
+  --danger: #b42318;
+  --chrome-bottom: calc(58px + env(safe-area-inset-bottom, 0px));
+  --surface-grad: linear-gradient(
+    165deg,
+    rgba(236, 244, 241, 0.96) 0%,
+    rgba(220, 232, 228, 0.97) 48%,
+    rgba(210, 224, 220, 0.98) 100%
+  );
+}
+
 body, html {
   height: 100%;
   margin: 0;
@@ -5,9 +23,13 @@ body, html {
   padding: 0;
   position: fixed;
   width: 100%;
-  font-family: Inter, sans-serif;
+  font-family: "Outfit", "Source Sans 3", sans-serif;
   font-weight: 400;
   font-size: 1rem;
+  color: var(--text);
+  background: var(--mist);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 #app {
@@ -17,62 +39,159 @@ body, html {
   flex-direction: column;
 }
 
-#map, canvas{
+#map, canvas {
   position: absolute;
   top: 0;
   left: 0;
   width: 100%;
   height: 100%;
   max-height: 100%;
-  margin: 20,20,20,20px;
 }
 
-.MunicipalitySelector-container {
+.AuthScreen {
+  background:
+    radial-gradient(ellipse 80% 55% at 15% 10%, rgba(47, 122, 106, 0.22), transparent 55%),
+    radial-gradient(ellipse 70% 50% at 90% 85%, rgba(20, 50, 60, 0.18), transparent 50%),
+    linear-gradient(160deg, #cfdeda 0%, #d8e4e1 42%, #c5d5d1 100%);
+}
+
+.AppChrome-mapArea {
   position: absolute;
-  top: 10px;
-  left: 10px;
-  z-index: 10; /* Ensure this is higher than the map's z-index */
-  background: white;
-  padding: 10px;
-  border-radius: 5px;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
-  width: 100%; /* Make it flexible */
-  max-width: 400px; /* Set a maximum width */
-  box-sizing: border-box; /* Include padding and border in the element's total width and height */
+  inset: 0;
+  bottom: var(--chrome-bottom);
 }
 
+.AppChrome-mapArea #map {
+  height: 100%;
+  max-height: 100%;
+}
+
+.AppChrome-sheetBody {
+  width: 100%;
+  overflow-y: auto;
+  max-height: calc(68vh - 72px);
+  -webkit-overflow-scrolling: touch;
+}
+
+@media (min-width: 900px) {
+  .AppChrome-mapArea {
+    bottom: 0;
+  }
+
+  .AppChrome-sheetBody {
+    max-height: calc(100vh - 64px);
+  }
+}
+
+.AppChrome-filters .WorkerSelector-container,
 .WorkerSelector-container {
-  position: absolute;
-  top: 10px;
-  left: 420px;
-  z-index: 10; /* Ensure this is higher than the map's z-index */
-  background: white;
-  padding: 10px;
-  border-radius: 5px;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
-  width: 100%; /* Make it flexible */
-  max-width: 400px; /* Set a maximum width */
-  box-sizing: border-box; /* Include padding and border in the element's total width and height */
+  position: static;
+  z-index: auto;
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+  box-shadow: none;
+  width: 100%;
+  max-width: none;
+  box-sizing: border-box;
 }
 
-.warning-message {
-  color: red;
-  font-size: 14px;
-  font-weight: bold;
-  margin-top: 5px;
+.warning-message,
+.error-message {
+  color: var(--danger);
+  font-size: 0.78rem;
+  font-weight: 500;
+  margin-top: 8px;
 }
 
+.Legend-container,
+.DataRefresh-container,
+.VisitPlan-container {
+  position: static;
+  z-index: auto;
+  background: transparent;
+  padding: 0 !important;
+  border-radius: 0;
+  box-shadow: none !important;
+  width: 100%;
+  max-width: none;
+  box-sizing: border-box;
+}
 
-.Legend-container {
-  position: absolute;
-  bottom: 10px;
-  left: 10px;
-  z-index: 10; /* Ensure this is higher than the map's z-index */
-  background: white;
-  padding: 10px;
-  border-radius: 5px;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
-  width: 100%; /* Make it flexible */
-  max-width: 400px; /* Set a maximum width */
-  box-sizing: border-box; /* Include padding and border in the element's total width and height */
+.Legend-container,
+.VisitPlan-container {
+  max-height: none;
+  overflow-y: visible;
+}
+
+/* react-select — surface tinted */
+.basic-multi-select .select__control {
+  min-height: 42px;
+  border-radius: 11px;
+  border-color: rgba(20, 50, 60, 0.14);
+  box-shadow: none;
+  background: rgba(255, 255, 255, 0.45);
+}
+
+.basic-multi-select .select__control:hover {
+  border-color: rgba(20, 50, 60, 0.24);
+}
+
+.basic-multi-select .select__control--is-focused {
+  border-color: var(--sage);
+  box-shadow: 0 0 0 3px rgba(47, 122, 106, 0.18);
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.basic-multi-select .select__value-container {
+  padding: 2px 8px;
+}
+
+.basic-multi-select .select__multi-value {
+  background: rgba(47, 122, 106, 0.12);
+  border-radius: 7px;
+}
+
+.basic-multi-select .select__multi-value__label {
+  color: var(--ink);
+  font-size: 0.82rem;
+  font-weight: 500;
+}
+
+.basic-multi-select .select__multi-value__remove:hover {
+  background: rgba(180, 35, 24, 0.1);
+  color: var(--danger);
+}
+
+.basic-multi-select .select__placeholder {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.basic-multi-select .select__menu {
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid rgba(20, 50, 60, 0.1);
+  background: #eef5f2;
+  box-shadow: 0 14px 36px rgba(12, 32, 38, 0.16);
+  z-index: 1500;
+}
+
+.basic-multi-select .select__option--is-focused {
+  background: rgba(47, 122, 106, 0.1);
+}
+
+.basic-multi-select .select__option--is-selected {
+  background: var(--ink);
+}
+
+.AppChrome-sheet .select__menu,
+.AppChrome-sheet .select__menu-portal {
+  z-index: 1500;
+}
+
+@media (max-width: 399px) {
+  .AppChrome-bar button span:last-child {
+    font-size: 0.52rem !important;
+  }
 }
