@@ -196,7 +196,9 @@ async function getRouteFromGoogle(origin, destination) {
       return cached;
     }
 
-    const getRoute = async (travelMode, includeRouteModifiers = true) => {
+    // Solo coche: a las trabajadoras se les paga por km conducidos, así que los km
+    // de transporte público (TRANSIT) no sirven; además evita la doble llamada del fallback.
+    const getRoute = async () => {
       const requestBody = {
         origin: {
           location: {
@@ -214,19 +216,17 @@ async function getRouteFromGoogle(origin, destination) {
             }
           }
         },
-        travelMode,
+        travelMode: 'DRIVE',
         computeAlternativeRoutes: false,
         polylineEncoding: 'GEO_JSON_LINESTRING',
         languageCode: 'es-ES',
-        units: 'METRIC'
-      };
-      if (includeRouteModifiers && travelMode !== 'TRANSIT') {
-        requestBody.routeModifiers = {
+        units: 'METRIC',
+        routeModifiers: {
           avoidTolls: false,
           avoidHighways: false,
           avoidFerries: false
-        };
-      }
+        }
+      };
 
       const response = await postGoogleRoute(requestBody);
       if (response.data.routes && response.data.routes.length > 0) {
@@ -244,17 +244,7 @@ async function getRouteFromGoogle(origin, destination) {
       return null;
     };
 
-    let route = null;
-    try {
-      route = await getRoute('TRANSIT', false);
-    } catch (transitError) {
-      const detail = transitError.response?.data?.error?.message || transitError.message;
-      logger.warn(`TRANSIT falló: ${detail}`);
-    }
-    if (!route) {
-      logger.debug('Intentando fallback DRIVE');
-      route = await getRoute('DRIVE', true);
-    }
+    const route = await getRoute();
 
     if (route) {
       routeCache.set(routeKey, route);
@@ -465,23 +455,29 @@ async function getLeg(origin, destination) {
   };
 }
 
-const MAX_LEG_POINTS = 15;
+// Partida + 14 visitas + llegada (si acaba en otro sitio)
+const MAX_LEG_POINTS = 16;
 
 /**
  * Calcula tramos consecutivos para un orden de puntos (partida + visitas).
+ * Con returnToStart añade el tramo de vuelta (última visita → partida), que no
+ * cuenta para el máximo de puntos; ese tramo lleva to_index = 0.
  * @param {Array<{lat: number, lon: number}>} pointsOrdered
+ * @param {{ returnToStart?: boolean }} [opts]
  */
-async function computeLegs(pointsOrdered) {
+async function computeLegs(pointsOrdered, opts = {}) {
+  const returnToStart = Boolean(opts.returnToStart);
   if (!Array.isArray(pointsOrdered) || pointsOrdered.length < 2) {
     return {
       legs: [],
       total_distance_m: 0,
       total_distance_km: 0,
       points_count: pointsOrdered?.length || 0,
+      return_to_start: returnToStart,
     };
   }
   if (pointsOrdered.length > MAX_LEG_POINTS) {
-    const err = new Error(`Máximo ${MAX_LEG_POINTS} puntos (partida + visitas)`);
+    const err = new Error(`Máximo ${MAX_LEG_POINTS} puntos (partida + visitas + llegada)`);
     err.status = 400;
     throw err;
   }
@@ -489,15 +485,18 @@ async function computeLegs(pointsOrdered) {
   const legs = [];
   let total_distance_m = 0;
   let legsWithDistance = 0;
+  const n = pointsOrdered.length;
+  const legCount = returnToStart ? n : n - 1;
 
-  for (let i = 0; i < pointsOrdered.length - 1; i++) {
+  for (let i = 0; i < legCount; i++) {
+    const next = (i + 1) % n;
     const origin = {
       lat: Number(pointsOrdered[i].lat),
       lon: Number(pointsOrdered[i].lon),
     };
     const destination = {
-      lat: Number(pointsOrdered[i + 1].lat),
-      lon: Number(pointsOrdered[i + 1].lon),
+      lat: Number(pointsOrdered[next].lat),
+      lon: Number(pointsOrdered[next].lon),
     };
     if (
       !Number.isFinite(origin.lat) ||
@@ -505,7 +504,7 @@ async function computeLegs(pointsOrdered) {
       !Number.isFinite(destination.lat) ||
       !Number.isFinite(destination.lon)
     ) {
-      const err = new Error(`Coordenadas inválidas en el punto ${i} o ${i + 1}`);
+      const err = new Error(`Coordenadas inválidas en el punto ${i} o ${next}`);
       err.status = 400;
       throw err;
     }
@@ -518,7 +517,7 @@ async function computeLegs(pointsOrdered) {
     }
     legs.push({
       from_index: i,
-      to_index: i + 1,
+      to_index: next,
       origin,
       destination,
       polyline: leg.polyline,
@@ -536,6 +535,7 @@ async function computeLegs(pointsOrdered) {
     total_distance_km: Math.round((total_distance_m / 1000) * 10) / 10,
     legs_with_distance: legsWithDistance,
     points_count: pointsOrdered.length,
+    return_to_start: returnToStart,
   };
 }
 

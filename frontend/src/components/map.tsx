@@ -4,6 +4,8 @@ import { Deck } from '@deck.gl/core';
 import { IconLayer, PathLayer, ScatterplotLayer, TextLayer } from '@deck.gl/layers';
 
 const ORIGIN_ICON_URL = `${import.meta.env.BASE_URL}icons/origin-person.svg`;
+const WORKER_HOME_ICON_URL = `${import.meta.env.BASE_URL}icons/worker-home.svg`;
+const END_ICON_URL = `${import.meta.env.BASE_URL}icons/end-flag.svg`;
 import { CircularProgress, Backdrop, Paper, Typography } from '@mui/material';
 
 import { LegsResult, MapPoint, VisitPlanPoint } from '../services/map_service';
@@ -16,6 +18,10 @@ interface MapProps {
   planningMode?: boolean;
   planOrigin?: VisitPlanPoint | null;
   planStops?: VisitPlanPoint[];
+  /** Llegada distinta de la partida (acabar en otro sitio) */
+  planEnd?: VisitPlanPoint | null;
+  /** Trabajadora de la ruta en planificación: las usuarias de las demás se atenúan */
+  planWorkerId?: string | number | null;
   planLegs?: LegsResult | null;
   onPlanPointClick?: (point: MapPoint) => void;
   onPlanMapClick?: (lat: number, lon: number) => void;
@@ -105,6 +111,8 @@ const Map: React.FC<MapProps> = ({
   planningMode = false,
   planOrigin = null,
   planStops = [],
+  planEnd = null,
+  planWorkerId = null,
   planLegs = null,
   onPlanPointClick,
   onPlanMapClick,
@@ -281,7 +289,8 @@ const Map: React.FC<MapProps> = ({
               }
             }
 
-            if (!hasOriginRef.current && info.coordinate && info.coordinate.length >= 2) {
+            // Zona vacía: App decide si fija/mueve la partida, fija la llegada o lo ignora
+            if (info.coordinate && info.coordinate.length >= 2) {
               const [lon, lat] = info.coordinate;
               onPlanMapClickRef.current?.(lat, lon);
             }
@@ -355,14 +364,18 @@ const Map: React.FC<MapProps> = ({
             id: 'user-points',
             data: userPoints,
             getPosition: (d: MapPoint) => [d.lon, d.lat],
-            getFillColor: (d: MapPoint) => getWorkerColor(d.id),
+            getFillColor: (d: MapPoint): [number, number, number, number] => {
+              const dimmed =
+                planningMode && planWorkerId != null && String(d.id) !== String(planWorkerId);
+              return [...getWorkerColor(d.id), dimmed ? 55 : 255];
+            },
             getRadius: 120,
             radiusUnits: 'meters',
             radiusMinPixels: 6,
             radiusMaxPixels: 15,
             pickable: true,
             updateTriggers: {
-              getFillColor: workers
+              getFillColor: [workers, planningMode, planWorkerId]
             }
           })
         );
@@ -370,19 +383,19 @@ const Map: React.FC<MapProps> = ({
 
       if (workerHomes.length > 0) {
         layers.push(
-          new ScatterplotLayer({
+          // Domicilio de cada trabajadora seleccionada: icono de casa centrado en el punto
+          new IconLayer({
             id: 'worker-homes',
             data: workerHomes,
             getPosition: (d: MapPoint) => [d.lon, d.lat],
-            getFillColor: [220, 38, 38],
-            getLineColor: [255, 255, 255],
-            getRadius: 320,
-            radiusUnits: 'meters',
-            radiusMinPixels: 14,
-            radiusMaxPixels: 32,
-            lineWidthMinPixels: 4,
-            stroked: true,
-            filled: true,
+            getIcon: () => ({
+              url: WORKER_HOME_ICON_URL,
+              width: 64,
+              height: 64,
+              anchorY: 32,
+            }),
+            getSize: 36,
+            sizeUnits: 'pixels',
             pickable: true,
           })
         );
@@ -477,13 +490,33 @@ const Map: React.FC<MapProps> = ({
           })
         );
       }
+
+      if (planEnd) {
+        layers.push(
+          new IconLayer({
+            id: 'plan-end',
+            data: [planEnd],
+            getPosition: (d: VisitPlanPoint) => [d.lon, d.lat],
+            getIcon: () => ({
+              url: END_ICON_URL,
+              width: 64,
+              height: 80,
+              anchorY: 80,
+            }),
+            getSize: 48,
+            sizeUnits: 'pixels',
+            pickable: false,
+            parameters: { depthTest: false },
+          })
+        );
+      }
     }
 
     deckRef.current.setProps({
       layers,
       canvas: mapRef.current.getCanvas()
     });
-  }, [points, routes, workers, planningMode, planOrigin, planStops, planLegs]);
+  }, [points, routes, workers, planningMode, planOrigin, planStops, planEnd, planLegs, planWorkerId]);
 
   return (
     <div id="map" style={{ width: '100%', height: '100%', position: 'relative' }}>

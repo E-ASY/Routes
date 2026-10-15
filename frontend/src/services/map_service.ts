@@ -192,14 +192,55 @@ export const mapsService = {
     return result;
   },
 
-  /** Tramos ordenados (partida + visitas) vía Google Routes */
-  async computeLegs(points: LatLon[]): Promise<LegsResult> {
+  /** Tramos ordenados (partida + visitas) vía Google Routes; con returnToStart, también la vuelta */
+  async computeLegs(points: LatLon[], returnToStart = false): Promise<LegsResult> {
     return apiRequest<LegsResult>('/maps/legs', {
       method: 'POST',
-      body: JSON.stringify({ points }),
+      body: JSON.stringify({ points, returnToStart }),
+    });
+  },
+
+  /**
+   * PERF-013: orden de visitas con menos km (points[0] = partida fija). Sin llamadas a Google.
+   * Con endAtLast, el último punto es la llegada fija y no se reordena.
+   */
+  async optimizeOrder(
+    points: LatLon[],
+    { returnToStart = false, endAtLast = false }: { returnToStart?: boolean; endAtLast?: boolean } = {}
+  ): Promise<OptimizeOrderResult> {
+    return apiRequest<OptimizeOrderResult>('/maps/optimize-order', {
+      method: 'POST',
+      body: JSON.stringify({ points, returnToStart, endAtLast }),
     });
   },
 };
+
+export interface OptimizeOrderResult {
+  /** Índices sobre los puntos enviados; order[0] === 0 (partida) y, con llegada, el último fijo */
+  order: number[];
+  method: 'exact' | 'heuristic' | 'nn';
+  ms: number;
+  straight_km_before: number;
+  straight_km_after: number;
+  changed: boolean;
+}
+
+/** Dónde acaba la trabajadora: en la última visita, de vuelta en la partida o en otro sitio */
+export type PlanFinish = 'last' | 'start' | 'custom';
+
+/** Resultado de "Optimizar orden" en el planificador */
+export interface PlanOptimization {
+  /** Visitas tal como quedaron tras optimizar (para saber si siguen vigentes) */
+  stops: VisitPlanPoint[];
+  /** Final con el que se optimizó (los km solo son comparables con el mismo final) */
+  finish: PlanFinish;
+  end: VisitPlanPoint | null;
+  changed: boolean;
+  /** Total Google del orden anterior, si estaba calculado */
+  kmBefore: number | null;
+  straightKmBefore: number;
+  straightKmAfter: number;
+}
 
 export interface DataStatus {
   updated_at: string | null;
@@ -237,9 +278,11 @@ export interface LegsResult {
   total_distance_km: number;
   legs_with_distance?: number;
   points_count: number;
+  /** Si incluye el tramo de vuelta (último legs[] con to_index = 0) */
+  return_to_start?: boolean;
 }
 
-/** Punto de partida o visita en el planificador */
+/** Punto de partida, visita o llegada en el planificador */
 export interface VisitPlanPoint {
   lat: number;
   lon: number;
@@ -248,4 +291,6 @@ export interface VisitPlanPoint {
   sourceKind?: 'user' | 'worker' | 'map';
   userId?: string | number;
   mapPointId?: string | number;
+  /** Trabajadora a la que pertenece la usuaria o la casa (MapPoint.id) */
+  workerId?: string | number;
 }

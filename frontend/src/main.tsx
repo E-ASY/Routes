@@ -13,18 +13,36 @@ import {
   LegsResult,
   MapPoint,
   MileageByWorker,
+  PlanFinish,
+  PlanOptimization,
   VisitPlanPoint,
   Worker,
   mapsService,
 } from './services/map_service';
 import { Box, Typography } from '@mui/material';
 
+function formatWorkerName(point: MapPoint): string {
+  return [point.workerName, point.workerApe1, point.workerApe2].filter(Boolean).join(' ') || 'Trabajadora';
+}
+
 function formatMapPointLabel(point: MapPoint): string {
   if (point.kind === 'worker') {
-    return [point.workerName, point.workerApe1, point.workerApe2].filter(Boolean).join(' ') || 'Trabajadora';
+    return formatWorkerName(point);
   }
   const name = [point.userName, point.userApe1, point.userApe2].filter(Boolean).join(' ');
   return name || `Usuaria ${point.userId ?? ''}`;
+}
+
+/** Plan guardado de una trabajadora mientras se planifica a otra */
+interface SavedPlan {
+  origin: VisitPlanPoint | null;
+  stops: VisitPlanPoint[];
+  end: VisitPlanPoint | null;
+  finish: PlanFinish;
+}
+
+function formatWorkerFullName(worker: Worker): string {
+  return [worker.name, worker.ape_1, worker.ape_2].filter(Boolean).join(' ') || `Trabajadora ${worker.id}`;
 }
 
 const App: React.FC = () => {
@@ -42,8 +60,46 @@ const App: React.FC = () => {
   const [planLegs, setPlanLegs] = useState<LegsResult | null>(null);
   const [legsLoading, setLegsLoading] = useState(false);
   const [legsError, setLegsError] = useState<string | null>(null);
+  // Por defecto la trabajadora vuelve a la partida al terminar (circuito): cuenta el tramo de vuelta.
+  // Con 'custom' acaba en otro sitio (planEnd), que no se reordena al optimizar.
+  const [planFinish, setPlanFinish] = useState<PlanFinish>('start');
+  const [planEnd, setPlanEnd] = useState<VisitPlanPoint | null>(null);
+  const planReturnToStart = planFinish === 'start';
+  const activeEnd = planFinish === 'custom' ? planEnd : null;
+  // Con 'custom', la llegada se elige al final: tras la primera visita, tocar el mapa o la
+  // trabajadora fija la llegada y volver a tocar la mueve (las usuarias siguen siendo visitas)
+  const endEditable = planningMode && planFinish === 'custom' && planOrigin != null && planStops.length > 0;
+  const [optimizeLoading, setOptimizeLoading] = useState(false);
+  const [optimizeError, setOptimizeError] = useState<string | null>(null);
+  const [optimization, setOptimization] = useState<PlanOptimization | null>(null);
   const planOriginRef = React.useRef<VisitPlanPoint | null>(null);
   planOriginRef.current = planOrigin;
+  const planEndRef = React.useRef<VisitPlanPoint | null>(null);
+  planEndRef.current = activeEnd;
+  const endEditableRef = React.useRef(false);
+  endEditableRef.current = endEditable;
+  // La partida se puede mover hasta tocar la primera usuaria (visita 1)
+  const originEditable = planOrigin != null && planStops.length === 0;
+  const originEditableRef = React.useRef(false);
+  originEditableRef.current = originEditable;
+  // Se planifica a una trabajadora cada vez; los planes de las demás seleccionadas se guardan
+  const [planWorkerId, setPlanWorkerId] = useState<string | null>(null);
+  const [savedPlans, setSavedPlans] = useState<Record<string, SavedPlan>>({});
+  const planWorker = legendWorkers.find((w) => String(w.id) === planWorkerId) ?? null;
+  const planWorkerLabel = planWorker ? formatWorkerFullName(planWorker) : null;
+  const planWorkerIdRef = React.useRef<string | null>(null);
+  planWorkerIdRef.current = planWorkerId;
+  const planWorkerLabelRef = React.useRef<string | null>(null);
+  planWorkerLabelRef.current = planWorkerLabel;
+  const pointsRef = React.useRef<MapPoint[] | null>(null);
+  pointsRef.current = points;
+  const [planNotice, setPlanNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!planNotice) return;
+    const timer = window.setTimeout(() => setPlanNotice(null), 5000);
+    return () => window.clearTimeout(timer);
+  }, [planNotice]);
 
   useEffect(() => {
     let cancelled = false;
@@ -96,9 +152,12 @@ const App: React.FC = () => {
     const timer = window.setTimeout(async () => {
       setLegsLoading(true);
       setLegsError(null);
-      const ordered = [planOrigin, ...planStops].map((p) => ({ lat: p.lat, lon: p.lon }));
+      const ordered = [planOrigin, ...planStops, ...(activeEnd ? [activeEnd] : [])].map((p) => ({
+        lat: p.lat,
+        lon: p.lon,
+      }));
       try {
-        const result = await mapsService.computeLegs(ordered);
+        const result = await mapsService.computeLegs(ordered, planReturnToStart);
         if (!cancelled) setPlanLegs(result);
       } catch (err) {
         if (!cancelled) {
@@ -114,21 +173,111 @@ const App: React.FC = () => {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [planningMode, planOrigin, planStops]);
+  }, [planningMode, planOrigin, planStops, planReturnToStart, activeEnd]);
+
+  // PERF-013: reordena las visitas (partida y llegada fijas) y guarda los km Google previos
+  // para mostrar "Antes → Ahora" cuando /legs recalcule el nuevo orden.
+  const handleOptimizeOrder = useCallback(async () => {
+    if (!planOrigin || planStops.length < 2) return;
+    setOptimizeLoading(true);
+    setOptimizeError(null);
+    try {
+      const points = [planOrigin, ...planStops, ...(activeEnd ? [activeEnd] : [])].map((p) => ({
+        lat: p.lat,
+        lon: p.lon,
+      }));
+      const result = await mapsService.optimizeOrder(points, {
+        returnToStart: planReturnToStart,
+        endAtLast: activeEnd != null,
+      });
+      // Quitar partida (primero) y llegada (último) del orden: solo se reordenan las visitas
+      const visitOrder = result.order.slice(1, activeEnd ? -1 : undefined);
+      const reordered = result.changed ? visitOrder.map((i) => planStops[i - 1]) : planStops;
+      // Solo comparar con km Google ya calculados para este mismo orden y modo
+      const legsMatchCurrent =
+        !legsLoading &&
+        planLegs != null &&
+        planLegs.points_count === points.length &&
+        Boolean(planLegs.return_to_start) === planReturnToStart;
+      setOptimization({
+        stops: reordered,
+        finish: planFinish,
+        end: activeEnd,
+        changed: result.changed,
+        kmBefore: legsMatchCurrent ? planLegs.total_distance_km : null,
+        straightKmBefore: result.straight_km_before,
+        straightKmAfter: result.straight_km_after,
+      });
+      if (result.changed) setPlanStops(reordered);
+    } catch (err) {
+      setOptimizeError(err instanceof Error ? err.message : 'Error al optimizar el orden');
+    } finally {
+      setOptimizeLoading(false);
+    }
+  }, [planOrigin, planStops, planLegs, legsLoading, planReturnToStart, planFinish, activeEnd]);
 
   const clearPlan = useCallback(() => {
     setPlanOrigin(null);
     setPlanStops([]);
+    setPlanEnd(null);
     setPlanLegs(null);
     setLegsError(null);
+    setOptimization(null);
+    setOptimizeError(null);
+    setPlanNotice(null);
   }, []);
 
+  /** Activa el plan de otra trabajadora; guarda el actual si su trabajadora sigue seleccionada */
+  const activatePlanWorker = useCallback(
+    (nextId: string | null, { saveCurrent = true }: { saveCurrent?: boolean } = {}) => {
+      if (nextId === planWorkerId) return;
+      const current: SavedPlan = { origin: planOrigin, stops: planStops, end: planEnd, finish: planFinish };
+      const hasContent = current.origin != null || current.stops.length > 0 || current.end != null;
+      const next = nextId != null ? savedPlans[nextId] : undefined;
+      setSavedPlans((prev) => {
+        const updated = { ...prev };
+        if (planWorkerId != null) {
+          if (saveCurrent && hasContent) updated[planWorkerId] = current;
+          else delete updated[planWorkerId];
+        }
+        if (nextId != null) delete updated[nextId];
+        return updated;
+      });
+      clearPlan();
+      setPlanOrigin(next?.origin ?? null);
+      setPlanStops(next?.stops ?? []);
+      setPlanEnd(next?.end ?? null);
+      setPlanFinish(next?.finish ?? 'start');
+      setPlanWorkerId(nextId);
+    },
+    [planWorkerId, planOrigin, planStops, planEnd, planFinish, savedPlans, clearPlan]
+  );
+
+  // Selección de trabajadoras cambiada: descartar planes de las quitadas y, si solo queda una, elegirla
+  useEffect(() => {
+    const selected = new Set(workers.map(String));
+    setSavedPlans((prev) => {
+      const kept = Object.fromEntries(Object.entries(prev).filter(([id]) => selected.has(id)));
+      return Object.keys(kept).length === Object.keys(prev).length ? prev : kept;
+    });
+    const activeRemoved = planWorkerId != null && !selected.has(planWorkerId);
+    if (activeRemoved || planWorkerId == null) {
+      const fallback = workers.length === 1 ? String(workers[0]) : null;
+      if (fallback !== planWorkerId) activatePlanWorker(fallback, { saveCurrent: false });
+    }
+  }, [workers, planWorkerId, activatePlanWorker]);
+
+  // Desactivar el modo solo oculta los planes; se conservan al volver a activarlo
   const handlePlanningModeChange = (enabled: boolean) => {
     setPlanningMode(enabled);
-    if (!enabled) clearPlan();
+    setPlanNotice(null);
   };
 
   const handlePlanPointClick = useCallback((point: MapPoint) => {
+    if (planWorkerIdRef.current == null) {
+      setPlanNotice('Elige primero a qué trabajadora planificar.');
+      return;
+    }
     const visit: VisitPlanPoint = {
       lat: point.lat,
       lon: point.lon,
@@ -136,6 +285,7 @@ const App: React.FC = () => {
       sourceKind: point.kind === 'worker' ? 'worker' : 'user',
       userId: point.userId,
       mapPointId: point.id,
+      workerId: point.id,
     };
 
     const currentOrigin = planOriginRef.current;
@@ -144,8 +294,17 @@ const App: React.FC = () => {
       return;
     }
 
-    // Tras partida: solo usuarias como visitas
+    const pointKind = point.kind === 'worker' ? 'worker' : 'user';
+    const isSamePlace = (a: VisitPlanPoint) =>
+      (a.sourceKind === pointKind && a.userId != null && String(a.userId) === String(point.userId)) ||
+      (a.lat === point.lat && a.lon === point.lon);
+
+    // Tras partida: solo usuarias como visitas. La trabajadora mueve la partida si aún no hay
+    // visitas, o fija/mueve la llegada si ya las hay (con "Otro sitio")
     if (point.kind === 'worker') {
+      if (isSamePlace(currentOrigin)) return;
+      if (originEditableRef.current) setPlanOrigin(visit);
+      else if (endEditableRef.current) setPlanEnd(visit);
       return;
     }
 
@@ -156,6 +315,31 @@ const App: React.FC = () => {
     if (originIsSameUser) {
       return;
     }
+    const currentEnd = planEndRef.current;
+    if (currentEnd && isSamePlace(currentEnd)) {
+      return;
+    }
+
+    // Usuaria de otra trabajadora: vale si también la atiende la de la ruta (puntos superpuestos)
+    let stop = visit;
+    const lockedWorker = planWorkerIdRef.current;
+    if (lockedWorker != null && String(point.id) !== String(lockedWorker)) {
+      const ownCopy = pointsRef.current?.find(
+        (p) =>
+          p.kind !== 'worker' &&
+          String(p.id) === String(lockedWorker) &&
+          String(p.userId) === String(point.userId)
+      );
+      if (!ownCopy) {
+        setPlanNotice(
+          `${visit.label} no es usuaria de ${planWorkerLabelRef.current ?? 'la trabajadora de esta ruta'}. ` +
+            'Cambia de trabajadora en "Planificar a" para añadirla a su ruta.'
+        );
+        return;
+      }
+      stop = { ...visit, workerId: ownCopy.id };
+    }
+    setPlanNotice(null);
 
     setPlanStops((prev) => {
       if (prev.some((s) => s.userId != null && String(s.userId) === String(point.userId))) {
@@ -167,18 +351,26 @@ const App: React.FC = () => {
       if (prev.length >= 14) {
         return prev;
       }
-      return [...prev, visit];
+      return [...prev, stop];
     });
   }, []);
 
   const handlePlanMapClick = useCallback((lat: number, lon: number) => {
-    if (planOriginRef.current) return;
-    setPlanOrigin({
+    const mapPoint: VisitPlanPoint = {
       lat,
       lon,
       label: `Mapa (${lat.toFixed(4)}, ${lon.toFixed(4)})`,
       sourceKind: 'map',
-    });
+    };
+    if (planWorkerIdRef.current == null) {
+      setPlanNotice('Elige primero a qué trabajadora planificar.');
+      return;
+    }
+    if (!planOriginRef.current || originEditableRef.current) {
+      setPlanOrigin(mapPoint);
+    } else if (endEditableRef.current) {
+      setPlanEnd(mapPoint);
+    }
   }, []);
 
   return (
@@ -200,12 +392,44 @@ const App: React.FC = () => {
               legs={planLegs}
               legsLoading={legsLoading}
               legsError={legsError}
+              finish={planFinish}
+              onFinishChange={setPlanFinish}
+              end={activeEnd}
+              endEditable={endEditable}
+              originEditable={originEditable}
+              planWorkerLabel={planWorkerLabel}
+              planWorkerId={planWorkerId}
+              workerOptions={legendWorkers
+                .filter((w) => workers.includes(String(w.id)))
+                .map((w) => ({
+                  id: String(w.id),
+                  label: formatWorkerFullName(w),
+                  stopsCount:
+                    String(w.id) === planWorkerId
+                      ? planStops.length
+                      : savedPlans[String(w.id)]?.stops.length ?? 0,
+                }))}
+              onPlanWorkerChange={(id) => activatePlanWorker(id)}
+              notice={planNotice}
+              onClearEnd={() => setPlanEnd(null)}
+              // Solo vale mientras las visitas sigan en el orden optimizado y con el mismo final
+              optimization={
+                optimization?.stops === planStops &&
+                optimization.finish === planFinish &&
+                optimization.end === activeEnd
+                  ? optimization
+                  : null
+              }
+              optimizeLoading={optimizeLoading}
+              optimizeError={optimizeError}
+              onOptimize={handleOptimizeOrder}
               onRemoveStop={(index) => setPlanStops((prev) => prev.filter((_, i) => i !== index))}
               onRemoveLast={() => setPlanStops((prev) => prev.slice(0, -1))}
               onClear={clearPlan}
               onClearOrigin={() => {
                 setPlanOrigin(null);
                 setPlanStops([]);
+                setPlanEnd(null);
                 setPlanLegs(null);
               }}
             />
@@ -235,6 +459,8 @@ const App: React.FC = () => {
             planningMode={planningMode}
             planOrigin={planOrigin}
             planStops={planStops}
+            planEnd={activeEnd}
+            planWorkerId={planWorkerId}
             planLegs={planLegs}
             onPlanPointClick={handlePlanPointClick}
             onPlanMapClick={handlePlanMapClick}

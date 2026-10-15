@@ -96,7 +96,63 @@ function parseMunicipalities(value, opts = {}) {
   });
 }
 
+/** PERF-013: misma cota que POST /legs (partida + 14 visitas + llegada). */
+const MAX_PLAN_POINTS = 16;
+
+const latLonSchema = z.object({
+  lat: z.number().finite().min(-90).max(90),
+  lon: z.number().finite().min(-180).max(180),
+});
+
+const optimizeOrderBodySchema = z
+  .object({
+    points: z
+      .array(latLonSchema)
+      .min(2, 'Se requieren al menos 2 puntos (partida + 1 visita)')
+      .max(MAX_PLAN_POINTS, `Máximo ${MAX_PLAN_POINTS} puntos (partida + visitas + llegada)`),
+    returnToStart: z.boolean().optional(),
+    // El último punto es la llegada fija (acabar en otro sitio)
+    endAtLast: z.boolean().optional(),
+  })
+  .refine((b) => !(b.returnToStart && b.endAtLast), {
+    message: 'returnToStart y endAtLast son excluyentes',
+  })
+  .refine((b) => !b.endAtLast || b.points.length >= 3, {
+    message: 'Con llegada se requieren al menos 3 puntos (partida + 1 visita + llegada)',
+  });
+
+/**
+ * Valida el body de POST /maps/optimize-order.
+ * @param {unknown} body
+ * @returns {{ ok: true, points: Array<{lat:number, lon:number}>, returnToStart: boolean, endAtLast: boolean }
+ *   | { ok: false, status: number, error: string }}
+ */
+function parseOptimizeOrderBody(body) {
+  const result = optimizeOrderBodySchema.safeParse(body ?? {});
+  if (!result.success) {
+    const first = result.error.issues[0];
+    if (first && first.code === 'custom') {
+      return { ok: false, status: 400, error: first.message };
+    }
+    const isCount = first && first.path.length === 1 && first.path[0] === 'points'
+      && (first.code === 'too_big' || first.code === 'too_small');
+    return {
+      ok: false,
+      status: 400,
+      error: isCount ? first.message : 'body.points debe ser [{ lat, lon }, ...] con coordenadas válidas',
+    };
+  }
+  return {
+    ok: true,
+    points: result.data.points.map(({ lat, lon }) => ({ lat, lon })),
+    returnToStart: result.data.returnToStart === true,
+    endAtLast: result.data.endAtLast === true,
+  };
+}
+
 module.exports = {
+  MAX_PLAN_POINTS,
+  parseOptimizeOrderBody,
   MAX_WORKERS,
   MAX_MUNICIPALITIES,
   idSchema,

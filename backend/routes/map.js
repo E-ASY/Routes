@@ -9,7 +9,12 @@ const dataService = require('../services/data');
 const routeService = require('../services/routes');
 const viewportService = require('../services/viewport');
 const { sendServerError } = require('../utils/errors');
-const { parseWorkers, parseMunicipalities } = require('../utils/queryParams');
+const { optimizePlanOrder } = require('../services/routeOptimizer');
+const {
+  parseWorkers,
+  parseMunicipalities,
+  parseOptimizeOrderBody,
+} = require('../utils/queryParams');
 const { mapsLimiter, routesLimiter, refreshLimiter } = require('../middleware/rateLimit');
 const logger = require('../utils/logger');
 
@@ -170,6 +175,9 @@ router.post('/refresh-snapshot', refreshLimiter, async (req, res) => {
 /**
  * @route   POST /legs
  * @desc    Tramos Google entre puntos ordenados (partida + visitas)
+ * @body    { points: [{ lat, lon }, ...], returnToStart?: boolean } — con
+ *          returnToStart se añade el tramo última visita → partida. Para acabar
+ *          en otro sitio, la llegada va como último punto.
  */
 router.post('/legs', routesLimiter, async (req, res) => {
   try {
@@ -179,14 +187,44 @@ router.post('/legs', routesLimiter, async (req, res) => {
         error: 'Se requieren al menos 2 puntos en body.points [{ lat, lon }, ...]',
       });
     }
-    logger.debug(`POST /legs points_count=${points.length}`);
-    const result = await routeService.computeLegs(points);
+    const returnToStart = req.body?.returnToStart === true;
+    logger.debug(`POST /legs points_count=${points.length} return_to_start=${returnToStart}`);
+    const result = await routeService.computeLegs(points, { returnToStart });
     res.json(result);
   } catch (error) {
     if (error.status === 400) {
       return res.status(400).json({ error: error.message });
     }
     return sendServerError(res, error, 'Error al calcular tramos');
+  }
+});
+
+/**
+ * @route   POST /optimize-order
+ * @desc    PERF-013: orden de visitas que minimiza km (points[0] = partida fija;
+ *          con endAtLast, el último punto es la llegada fija).
+ *          Haversine, sin llamadas a Google; los km reales los da después /legs.
+ * @body    { points: [{ lat, lon }, ...], returnToStart?: boolean, endAtLast?: boolean }
+ * @returns { order, method, ms, straight_km_before, straight_km_after, changed }
+ */
+router.post('/optimize-order', routesLimiter, (req, res) => {
+  try {
+    const parsed = parseOptimizeOrderBody(req.body);
+    if (!parsed.ok) {
+      return res.status(parsed.status).json({ error: parsed.error });
+    }
+    const result = optimizePlanOrder(parsed.points, {
+      returnToStart: parsed.returnToStart,
+      endAtLast: parsed.endAtLast,
+    });
+    logger.debug(
+      `POST /optimize-order points_count=${parsed.points.length} end_at_last=${parsed.endAtLast} ` +
+      `method=${result.method} ` +
+      `ms=${result.ms.toFixed(1)} changed=${result.changed}`
+    );
+    res.json(result);
+  } catch (error) {
+    return sendServerError(res, error, 'Error al optimizar el orden de visitas');
   }
 });
 
