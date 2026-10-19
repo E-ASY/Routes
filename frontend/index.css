@@ -32,6 +32,15 @@ body, html {
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* Sin barras de desplazamiento visibles; se sigue pudiendo deslizar (dedo, rueda, trackpad) */
+* {
+  scrollbar-width: none;
+}
+
+*::-webkit-scrollbar {
+  display: none;
+}
+
 #app {
   flex: 1 1 auto;
   min-height: 100vh;
@@ -73,12 +82,17 @@ body, html {
   -webkit-overflow-scrolling: touch;
 }
 
+.AppChrome-sheetBody--wide {
+  max-height: calc(min(82vh, 760px) - 40px);
+}
+
 @media (min-width: 900px) {
   .AppChrome-mapArea {
     bottom: 0;
   }
 
-  .AppChrome-sheetBody {
+  .AppChrome-sheetBody,
+  .AppChrome-sheetBody--wide {
     max-height: calc(100vh - 64px);
   }
 }

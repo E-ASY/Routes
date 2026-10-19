@@ -10,10 +10,12 @@ const routeService = require('../services/routes');
 const viewportService = require('../services/viewport');
 const { sendServerError } = require('../utils/errors');
 const { optimizePlanOrder } = require('../services/routeOptimizer');
+const { planDay, evaluateOrder, DEFAULT_SERVICE_MINUTES } = require('../services/visitScheduler');
 const {
   parseWorkers,
   parseMunicipalities,
   parseOptimizeOrderBody,
+  parseScheduleBody,
 } = require('../utils/queryParams');
 const { mapsLimiter, routesLimiter, refreshLimiter } = require('../middleware/rateLimit');
 const logger = require('../utils/logger');
@@ -225,6 +227,74 @@ router.post('/optimize-order', routesLimiter, (req, res) => {
     res.json(result);
   } catch (error) {
     return sendServerError(res, error, 'Error al optimizar el orden de visitas');
+  }
+});
+
+/**
+ * @route   POST /schedule-visits
+ * @desc    PERF-013: horario del día con franjas de disponibilidad por usuaria.
+ *          Tiempos y km por carretera (Google Route Matrix, 1 llamada; estimación si falla).
+ *          Solo aparta para otro día las visitas imposibles de encajar (franjas que se
+ *          solapan o sin hueco en la jornada); si alguna llega tarde por el viaje se
+ *          mantiene con su retraso (`late`). Hasta 3 opciones (menos km / terminar
+ *          antes / menos esperas).
+ * @body    { points: [{ lat, lon }, ...]  // partida, visitas y, con finish 'custom', llegada
+ *            finish: 'start'|'last'|'custom',
+ *            shift: { start, end },          // minutos desde medianoche
+ *            windows: [[{ start, end }], ...], // una lista por visita; vacía = cualquier hora
+ *            serviceMinutes?: number,        // por defecto 60
+ *            fixedStarts?: [number|null],    // hora fija por visita (manda sobre sus franjas)
+ *            mode?: 'optimize'|'manual',     // manual = horario del orden dado, con conflictos
+ *            goal?: 'distance'|'finish'|'idle' }  // criterio del horario en modo manual
+ */
+router.post('/schedule-visits', routesLimiter, async (req, res) => {
+  try {
+    const parsed = parseScheduleBody(req.body);
+    if (!parsed.ok) {
+      return res.status(parsed.status).json({ error: parsed.error });
+    }
+    const { points, finish, shift, serviceMinutes, mode, goal, fixedStarts } = parsed;
+    const service = serviceMinutes ?? DEFAULT_SERVICE_MINUTES;
+    // Una hora fija equivale a una franja exacta de la duración de la visita
+    const windows = parsed.windows.map((ranges, i) =>
+      fixedStarts[i] != null ? [{ start: fixedStarts[i], end: fixedStarts[i] + service }] : ranges
+    );
+    const matrix = await routeService.computeTravelMatrix(points);
+    const endNode = finish === 'custom' ? points.length - 1 : null;
+    const visits = windows.map((_, i) => i + 1);
+    const input = {
+      durations: matrix.durations,
+      distances: matrix.distances,
+      origin: 0,
+      visits,
+      windows,
+      shift,
+      finish,
+      endNode,
+      serviceMinutes: service,
+    };
+    if (mode === 'manual') {
+      const manual = evaluateOrder({ ...input, goal });
+      logger.debug(
+        `POST /schedule-visits mode=manual visits=${visits.length} feasible=${manual.feasible} ` +
+        `conflicts=${manual.conflicts.length} travel=${matrix.source}`
+      );
+      return res.json({ mode, ...manual, service_minutes: service, travel_source: matrix.source });
+    }
+    const result = planDay(input);
+    logger.debug(
+      `POST /schedule-visits visits=${visits.length} finish=${finish} ` +
+      `options=${result.options.length} unscheduled=${result.unscheduled.length} ` +
+      `travel=${matrix.source} exact=${result.exact} ms=${result.ms.toFixed(1)}`
+    );
+    res.json({
+      mode,
+      ...result,
+      service_minutes: service,
+      travel_source: matrix.source,
+    });
+  } catch (error) {
+    return sendServerError(res, error, 'Error al organizar el horario de visitas');
   }
 });
 

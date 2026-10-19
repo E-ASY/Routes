@@ -9,6 +9,7 @@ const END_ICON_URL = `${import.meta.env.BASE_URL}icons/end-flag.svg`;
 import { CircularProgress, Backdrop, Paper, Typography } from '@mui/material';
 
 import { LegsResult, MapPoint, VisitPlanPoint } from '../services/map_service';
+import { formatMinutes } from '../services/time_ranges';
 
 interface MapProps {
   workers: string[];
@@ -23,6 +24,8 @@ interface MapProps {
   /** Trabajadora de la ruta en planificación: las usuarias de las demás se atenúan */
   planWorkerId?: string | number | null;
   planLegs?: LegsResult | null;
+  /** Hora de inicio de cada visita (minutos desde medianoche), si hay horario */
+  planStopTimes?: number[] | null;
   onPlanPointClick?: (point: MapPoint) => void;
   onPlanMapClick?: (lat: number, lon: number) => void;
 }
@@ -114,6 +117,7 @@ const Map: React.FC<MapProps> = ({
   planEnd = null,
   planWorkerId = null,
   planLegs = null,
+  planStopTimes = null,
   onPlanPointClick,
   onPlanMapClick,
 }) => {
@@ -469,6 +473,37 @@ const Map: React.FC<MapProps> = ({
             parameters: { depthTest: false },
           })
         );
+        if (planStopTimes && planStopTimes.length === planStops.length) {
+          // Hora de la visita en una etiqueta bajo el número
+          const timed = planStops.map((stop, index) => ({
+            ...stop,
+            timeLabel: formatMinutes(planStopTimes[index]),
+          }));
+          layers.push(
+            new TextLayer({
+              id: 'plan-stop-times',
+              data: timed,
+              getPosition: (d: VisitPlanPoint & { timeLabel: string }) => [d.lon, d.lat],
+              getText: (d: { timeLabel: string }) => d.timeLabel,
+              getSize: 12,
+              sizeUnits: 'pixels',
+              getPixelOffset: [0, 30],
+              getColor: [20, 50, 60],
+              getTextAnchor: 'middle',
+              getAlignmentBaseline: 'center',
+              fontFamily: 'Arial, Helvetica, sans-serif',
+              fontWeight: 700,
+              characterSet: '0123456789:',
+              background: true,
+              getBackgroundColor: [255, 255, 255, 235],
+              getBorderColor: [30, 64, 175],
+              getBorderWidth: 1,
+              backgroundPadding: [5, 2, 5, 2],
+              pickable: false,
+              parameters: { depthTest: false },
+            })
+          );
+        }
       }
 
       if (planOrigin) {
@@ -516,7 +551,7 @@ const Map: React.FC<MapProps> = ({
       layers,
       canvas: mapRef.current.getCanvas()
     });
-  }, [points, routes, workers, planningMode, planOrigin, planStops, planEnd, planLegs, planWorkerId]);
+  }, [points, routes, workers, planningMode, planOrigin, planStops, planEnd, planLegs, planWorkerId, planStopTimes]);
 
   return (
     <div id="map" style={{ width: '100%', height: '100%', position: 'relative' }}>

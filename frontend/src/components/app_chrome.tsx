@@ -69,6 +69,8 @@ const AppChrome: React.FC<AppChromeProps> = ({
   };
 
   const closeSheet = () => setSheet(null);
+  // El panel de planificación lleva agenda y horas: más ancho y más alto que el resto
+  const wide = sheet === 'plan';
 
   const panels: Record<Exclude<ChromeSheet, null>, React.ReactNode> = {
     filters,
@@ -117,7 +119,7 @@ const AppChrome: React.FC<AppChromeProps> = ({
 
   // Mantener todos los paneles montados para no perder estado (p. ej. filtros)
   const panelBody = (
-    <Box className="AppChrome-sheetBody">
+    <Box className={`AppChrome-sheetBody${wide ? ' AppChrome-sheetBody--wide' : ''}`}>
       {sheetHeader}
       {(Object.keys(panels) as Exclude<ChromeSheet, null>[]).map((id) => (
         <Box
@@ -154,10 +156,10 @@ const AppChrome: React.FC<AppChromeProps> = ({
               left: 8,
               right: 8,
               width: 'auto',
-              maxWidth: 420,
+              maxWidth: wide ? 560 : 420,
               mx: 'auto',
               borderRadius: '18px 18px 14px 14px',
-              maxHeight: 'min(68vh, 560px)',
+              maxHeight: wide ? 'min(82vh, 760px)' : 'min(68vh, 560px)',
               mb: 'calc(62px + env(safe-area-inset-bottom, 0px))',
               zIndex: 1250,
               backgroundImage: SURFACE,
@@ -198,8 +200,9 @@ const AppChrome: React.FC<AppChromeProps> = ({
             className: 'AppChrome-sheet AppChrome-sheet--desktop',
             elevation: 0,
             sx: {
-              width: 360,
+              width: wide ? 460 : 360,
               maxWidth: '92vw',
+              transition: 'width 200ms ease',
               m: 1.5,
               height: 'calc(100% - 24px)',
               borderRadius: '16px',

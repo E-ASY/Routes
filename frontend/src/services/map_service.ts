@@ -213,7 +213,94 @@ export const mapsService = {
       body: JSON.stringify({ points, returnToStart, endAtLast }),
     });
   },
+
+  /**
+   * PERF-013: horario del día con franjas de disponibilidad. points = partida, visitas
+   * y (con finish 'custom') llegada; windows = una lista de franjas por visita.
+   */
+  async scheduleVisits(points: LatLon[], request: ScheduleRequest): Promise<ScheduleResult> {
+    return apiRequest<ScheduleResult>('/maps/schedule-visits', {
+      method: 'POST',
+      body: JSON.stringify({ points, ...request, mode: 'optimize' }),
+    });
+  },
+
+  /** Horario del orden actual (cambiado a mano), con los conflictos si no encaja */
+  async evaluateSchedule(
+    points: LatLon[],
+    request: ScheduleRequest & { goal: ScheduleGoal }
+  ): Promise<ManualScheduleResult> {
+    return apiRequest<ManualScheduleResult>('/maps/schedule-visits', {
+      method: 'POST',
+      body: JSON.stringify({ points, ...request, mode: 'manual' }),
+    });
+  },
 };
+
+/** Franja horaria en minutos desde medianoche (09:30 = 570) */
+export interface TimeRange {
+  start: number;
+  end: number;
+}
+
+export interface ScheduleRequest {
+  finish: PlanFinish;
+  shift: TimeRange;
+  /** Franjas por visita (vacío = cualquier hora) */
+  windows: TimeRange[][];
+  /** Hora fija de inicio por visita (null = sin fijar); manda sobre sus franjas */
+  fixedStarts: (number | null)[];
+}
+
+/** Qué prioriza una opción de horario */
+export type ScheduleGoal = 'distance' | 'finish' | 'idle';
+
+/** Visita programada; `visit` = posición en las visitas enviadas */
+export interface ScheduledVisit {
+  visit: number;
+  arrival: number;
+  start: number;
+  end: number;
+  wait: number;
+  /** Minutos que llega tarde a su franja u hora fija (0 = a tiempo) */
+  late: number;
+}
+
+export interface UnscheduledVisit {
+  visit: number;
+  /**
+   * no_window: ninguna franja cabe en la jornada; no_fit: su franja se solapa con las de
+   * otras visitas; no_room: sin franjas propias, pero no queda hueco en la jornada
+   */
+  reason: 'no_window' | 'no_fit' | 'no_room';
+}
+
+export interface ScheduleOption {
+  goals: ScheduleGoal[];
+  /** Orden de las visitas programadas (posiciones en las visitas enviadas) */
+  order: number[];
+  visits: ScheduledVisit[];
+  departure: number;
+  finish_time: number;
+  distance_m: number;
+  travel_min: number;
+  idle_min: number;
+  /** Suma de minutos de retraso de las visitas que llegan tarde */
+  late_min: number;
+  /** Minutos que se pasa de la jornada */
+  overtime_min: number;
+  unscheduled: UnscheduledVisit[];
+}
+
+export interface ScheduleResult {
+  options: ScheduleOption[];
+  unscheduled: UnscheduledVisit[];
+  exact: boolean;
+  ms: number;
+  service_minutes: number;
+  /** google = tiempos reales; estimate / mixed = alguno estimado en línea recta */
+  travel_source: 'google' | 'estimate' | 'mixed';
+}
 
 export interface OptimizeOrderResult {
   /** Índices sobre los puntos enviados; order[0] === 0 (partida) y, con llegada, el último fijo */
@@ -293,4 +380,22 @@ export interface VisitPlanPoint {
   mapPointId?: string | number;
   /** Trabajadora a la que pertenece la usuaria o la casa (MapPoint.id) */
   workerId?: string | number;
+}
+
+/** Problema del horario de una visita en el orden elegido a mano */
+export interface ScheduleConflict {
+  visit: number;
+  /** late: no llega a su hora fija; outside_window: ninguna franja sirve a esa hora */
+  type: 'late' | 'outside_window';
+  minutes: number | null;
+}
+
+export interface ManualScheduleResult {
+  option: ScheduleOption;
+  conflicts: ScheduleConflict[];
+  /** Minutos que se pasa de la jornada (0 si acaba a tiempo) */
+  after_shift_min: number;
+  feasible: boolean;
+  service_minutes: number;
+  travel_source: 'google' | 'estimate' | 'mixed';
 }
