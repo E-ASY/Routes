@@ -8,6 +8,7 @@ import Legend from './components/legend';
 import DataRefresh from './components/data_refresh';
 import VisitPlanPanel, { PlanSchedule } from './components/visit_plan_panel';
 import AppChrome from './components/app_chrome';
+import MapStrip from './components/map_strip';
 import AuthGuard from './components/auth/guard';
 import {
   LegsResult,
@@ -23,7 +24,8 @@ import {
   Worker,
   mapsService,
 } from './services/map_service';
-import { isValidRange } from './services/time_ranges';
+import { formatMinutes, isValidRange } from './services/time_ranges';
+import { planHint } from './services/plan_hint';
 import { formatPersonName } from './services/person_name';
 import {
   SavedPlan,
@@ -69,13 +71,26 @@ interface ScheduleRun {
   selected: number | null;
   /** Visitas tal como quedaron al aplicar la opción elegida */
   appliedStops: VisitPlanPoint[] | null;
-  /** Horario del orden que había al pulsar Organizar ("Tu orden"); null si no se pudo calcular */
+  /** "Tu orden": el último orden puesto a mano, con las mismas visitas que `stops` */
+  ownStops: VisitPlanPoint[];
+  /** Horario de `ownStops`; null si no se pudo calcular */
   own: ManualScheduleResult | null;
 }
 
-/** La opción deja las visitas en el orden enviado y no aparta ninguna */
-function isSentOrder(option: ScheduleOption): boolean {
-  return option.unscheduled.length === 0 && option.order.every((visit, i) => visit === i);
+/** Mismas visitas, sin importar el orden */
+function sameVisits(a: VisitPlanPoint[], b: VisitPlanPoint[]): boolean {
+  if (a.length !== b.length) return false;
+  const keys = new Set(a.map(stopKey));
+  return b.every((stop) => keys.has(stopKey(stop)));
+}
+
+/** La opción deja las visitas en el orden `order` y no aparta ninguna */
+function optionMatchesOrder(option: ScheduleOption, stops: VisitPlanPoint[], order: VisitPlanPoint[]): boolean {
+  return (
+    option.unscheduled.length === 0 &&
+    option.order.length === order.length &&
+    option.order.every((visit, i) => stopKey(stops[visit]) === stopKey(order[i]))
+  );
 }
 
 function formatWorkerFullName(worker: Worker): string {
@@ -96,6 +111,18 @@ const App: React.FC = () => {
   const [planningMode, setPlanningMode] = useState(initialDraft?.planningMode ?? false);
   const [planOrigin, setPlanOrigin] = useState<VisitPlanPoint | null>(initialDraft?.current.origin ?? null);
   const [planStops, setPlanStops] = useState<VisitPlanPoint[]>(initialDraft?.current.stops ?? []);
+  // "Tu orden": el último orden de visitas puesto a mano (no el de aplicar una opción)
+  const [ownStops, setOwnStops] = useState<VisitPlanPoint[]>(initialDraft?.ownStops ?? planStops);
+  const [initialAppliedOrders] = useState(() => {
+    // Plan recuperado con una opción aplicada: su orden no es el de la trabajadora
+    const applied = new WeakSet<VisitPlanPoint[]>();
+    if (initialDraft?.ownStops) applied.add(planStops);
+    return applied;
+  });
+  const appliedOrdersRef = React.useRef(initialAppliedOrders);
+  useEffect(() => {
+    if (!appliedOrdersRef.current.has(planStops)) setOwnStops(planStops);
+  }, [planStops]);
   const [planLegs, setPlanLegs] = useState<LegsResult | null>(null);
   const [legsLoading, setLegsLoading] = useState(false);
   const [legsError, setLegsError] = useState<string | null>(null);
@@ -243,18 +270,25 @@ const App: React.FC = () => {
     const stops = planStops;
     const windows = rangesFor(stops);
     const fixed = fixedFor(stops);
+    // Si se aplicó una opción, "Tu orden" sigue siendo el que puso la trabajadora
+    const ownOrder = sameVisits(ownStops, stops) ? ownStops : stops;
     setScheduleLoading(true);
     setScheduleError(null);
     try {
-      const points = [planOrigin, ...stops, ...(activeEnd ? [activeEnd] : [])].map((p) => ({
-        lat: p.lat,
-        lon: p.lon,
-      }));
-      const request = { finish: planFinish, shift: planShift, windows, fixedStarts: fixed };
-      // A la vez, el horario del orden actual para ofrecer volver a él ("Tu orden")
+      const toPoints = (visits: VisitPlanPoint[]) =>
+        [planOrigin, ...visits, ...(activeEnd ? [activeEnd] : [])].map((p) => ({ lat: p.lat, lon: p.lon }));
+      const request = { finish: planFinish, shift: planShift };
+      // A la vez, el horario de "Tu orden" para poder compararlo y volver a él
       const [result, own] = await Promise.all([
-        mapsService.scheduleVisits(points, request),
-        mapsService.evaluateSchedule(points, { ...request, goal: scheduleGoal }).catch(() => null),
+        mapsService.scheduleVisits(toPoints(stops), { ...request, windows, fixedStarts: fixed }),
+        mapsService
+          .evaluateSchedule(toPoints(ownOrder), {
+            ...request,
+            windows: rangesFor(ownOrder),
+            fixedStarts: fixedFor(ownOrder),
+            goal: scheduleGoal,
+          })
+          .catch(() => null),
       ]);
       setScheduleRun({
         result,
@@ -265,6 +299,7 @@ const App: React.FC = () => {
         windowsKey: JSON.stringify([windows, fixed]),
         selected: null,
         appliedStops: null,
+        ownStops: ownOrder,
         own,
       });
     } catch (err) {
@@ -273,12 +308,14 @@ const App: React.FC = () => {
     } finally {
       setScheduleLoading(false);
     }
-  }, [planOrigin, planStops, planFinish, activeEnd, planShift, rangesFor, fixedFor, scheduleGoal]);
+  }, [planOrigin, planStops, ownStops, planFinish, activeEnd, planShift, rangesFor, fixedFor, scheduleGoal]);
 
   // El resultado solo vale con las mismas visitas (antes o después de aplicarlo), final, jornada y franjas
   const scheduleFresh =
     scheduleRun != null &&
-    (planStops === scheduleRun.stops || planStops === scheduleRun.appliedStops) &&
+    (planStops === scheduleRun.stops ||
+      planStops === scheduleRun.appliedStops ||
+      planStops === scheduleRun.ownStops) &&
     scheduleRun.finish === planFinish &&
     scheduleRun.end === activeEnd &&
     scheduleRun.shift === planShift &&
@@ -289,9 +326,11 @@ const App: React.FC = () => {
       ? freshRun.result.options[freshRun.selected]
       : null;
   const shownOption = freshRun ? freshRun.result.options[freshRun.selected ?? 0] : undefined;
-  // "Tu orden": el que había al organizar. Si coincide con una opción, se marca esa opción
-  const ownMatchIndex = freshRun ? freshRun.result.options.findIndex(isSentOrder) : -1;
-  const onOwnOrder = freshRun != null && planStops === freshRun.stops;
+  // "Tu orden": si coincide con una opción, se marca esa opción en vez de repetirla
+  const ownMatchIndex = freshRun
+    ? freshRun.result.options.findIndex((option) => optionMatchesOrder(option, freshRun.stops, freshRun.ownStops))
+    : -1;
+  const onOwnOrder = freshRun != null && planStops === freshRun.ownStops;
 
   /** Aplica una opción: reordena las visitas y aparta para otro día las que no caben */
   const handleSelectScheduleOption = useCallback(
@@ -301,6 +340,8 @@ const App: React.FC = () => {
       if (!run || !option) return;
       const applied = option.order.map((i) => run.stops[i]);
       const left = option.unscheduled.map((u) => run.stops[u.visit]);
+      // No es un orden puesto a mano: "Tu orden" no cambia
+      appliedOrdersRef.current.add(applied);
       setPlanStops(applied);
       setPostponed((prev) => [...prev.filter((p) => !run.stops.includes(p)), ...left]);
       setScheduleRun({ ...run, selected: index, appliedStops: applied });
@@ -309,11 +350,11 @@ const App: React.FC = () => {
     [scheduleRun]
   );
 
-  /** Vuelve al orden que había al organizar; las visitas que apartó la opción vuelven a la ruta */
+  /** Vuelve a "Tu orden"; las visitas que apartó la opción vuelven a la ruta */
   const handleSelectOwnOrder = useCallback(() => {
     const run = scheduleRun;
     if (!run) return;
-    setPlanStops(run.stops);
+    setPlanStops(run.ownStops);
     setPostponed((prev) => prev.filter((p) => !run.stops.includes(p)));
     setScheduleRun({ ...run, selected: null, appliedStops: null });
   }, [scheduleRun]);
@@ -434,6 +475,7 @@ const App: React.FC = () => {
       },
       savedPlans,
       fixedStarts,
+      ownStops: ownStops !== planStops ? ownStops : undefined,
       scheduled: scheduleRun != null || resumeTimes,
     });
   }, [
@@ -450,13 +492,14 @@ const App: React.FC = () => {
     fixedStarts,
     scheduleRun,
     resumeTimes,
+    ownStops,
   ]);
   useEffect(() => saveAvailability(availability), [availability]);
 
-  // "Limpiar" se puede deshacer durante unos segundos
-  const [undoPlan, setUndoPlan] = useState<(SavedPlan & { run: ScheduleRun | null; resume: boolean }) | null>(null);
+  // "Limpiar" y quitar una visita se pueden deshacer durante unos segundos
+  const [undo, setUndo] = useState<{ message: string; restore: () => void } | null>(null);
   const clearPlanWithUndo = useCallback(() => {
-    setUndoPlan({
+    const before = {
       origin: planOrigin,
       stops: planStops,
       end: planEnd,
@@ -465,27 +508,51 @@ const App: React.FC = () => {
       postponed,
       run: scheduleRun,
       resume: resumeTimes,
+    };
+    setUndo({
+      message: 'Plan borrado',
+      restore: () => {
+        setPlanOrigin(before.origin);
+        setPlanStops(before.stops);
+        setPlanEnd(before.end);
+        setPlanFinish(before.finish);
+        setPlanShift(before.shift);
+        setPostponed(before.postponed);
+        setScheduleRun(before.run);
+        setResumeTimes(before.resume);
+      },
     });
     clearPlan();
   }, [planOrigin, planStops, planEnd, planFinish, planShift, postponed, scheduleRun, resumeTimes, clearPlan]);
-  const handleUndoClear = () => {
-    if (!undoPlan) return;
-    setPlanOrigin(undoPlan.origin);
-    setPlanStops(undoPlan.stops);
-    setPlanEnd(undoPlan.end);
-    setPlanFinish(undoPlan.finish);
-    setPlanShift(undoPlan.shift);
-    setPostponed(undoPlan.postponed);
-    setScheduleRun(undoPlan.run);
-    setResumeTimes(undoPlan.resume);
-    setUndoPlan(null);
-  };
+
+  const handleRemoveStop = useCallback(
+    (index: number) => {
+      const stop = planStops[index];
+      if (!stop) return;
+      const before = planStops;
+      const after = planStops.filter((_, i) => i !== index);
+      setPlanStops(after);
+      setUndo({
+        message: `${stop.label} quitada de la ruta`,
+        // Sin otros cambios se recupera la lista tal cual (y sigue valiendo el horario organizado)
+        restore: () =>
+          setPlanStops((prev) => {
+            if (prev === after) return before;
+            if (prev.length >= 14 || prev.some((s) => stopKey(s) === stopKey(stop))) return prev;
+            const next = prev.slice();
+            next.splice(Math.min(index, next.length), 0, stop);
+            return next;
+          }),
+      });
+    },
+    [planStops]
+  );
 
   /** Activa el plan de otra trabajadora; guarda el actual si su trabajadora sigue seleccionada */
   const activatePlanWorker = useCallback(
     (nextId: string | null, { saveCurrent = true }: { saveCurrent?: boolean } = {}) => {
       if (nextId === planWorkerId) return;
-      setUndoPlan(null);
+      setUndo(null);
       const current: SavedPlan = {
         origin: planOrigin,
         stops: planStops,
@@ -700,6 +767,27 @@ const App: React.FC = () => {
     isManual: manualResult != null && appliedOption == null,
   };
 
+  const hint = planHint({
+    planningMode,
+    workerCount: workers.length,
+    hasPlanWorker: planWorkerId != null,
+    hasOrigin: planOrigin != null,
+    originEditable,
+    endPending: endEditable && !planEnd,
+    stopsCount: planStops.length,
+  });
+  const stripTitle =
+    planWorkerLabel && planStops.length > 0
+      ? [
+          planWorkerLabel,
+          `${planStops.length} ${planStops.length === 1 ? 'visita' : 'visitas'}`,
+          planLegs && !legsLoading ? `${planLegs.total_distance_km.toFixed(1)} km` : null,
+          schedule.finishTime != null ? `acaba ${formatMinutes(schedule.finishTime)}` : null,
+        ]
+          .filter(Boolean)
+          .join(' · ')
+      : planWorkerLabel;
+
   const scheduleStopTimes = schedule.stopTimes;
   const planStopStarts = useMemo(
     () => scheduleStopTimes?.map((t) => t.start) ?? null,
@@ -711,9 +799,27 @@ const App: React.FC = () => {
       <AuthGuard>
         <AppChrome
           planningActive={planningMode}
+          statusBar={(openSheet) =>
+            workers.length === 0 ? (
+              <MapStrip
+                message="Elige trabajadoras para ver sus usuarias en el mapa."
+                actionLabel="Elegir"
+                onAction={() => openSheet('filters')}
+              />
+            ) : planningMode ? (
+              <MapStrip
+                title={stripTitle}
+                message={planNotice ?? hint}
+                warning={planNotice != null}
+                actionLabel="Ver plan"
+                onAction={() => openSheet('plan')}
+              />
+            ) : null
+          }
           filters={
             <Box className="AppChrome-filters" sx={{ display: 'flex', flexDirection: 'column', gap: 1.25 }}>
-              <WorkerSelector selectedIds={workers} onFilterChange={setWorkers} />
+              {/* key: tras "Actualizar datos" se vuelve a cargar la lista de trabajadoras */}
+              <WorkerSelector key={viewportKey} selectedIds={workers} onFilterChange={setWorkers} />
             </Box>
           }
           plan={
@@ -728,8 +834,6 @@ const App: React.FC = () => {
               finish={planFinish}
               onFinishChange={setPlanFinish}
               end={activeEnd}
-              endEditable={endEditable}
-              originEditable={originEditable}
               planWorkerLabel={planWorkerLabel}
               planWorkerId={planWorkerId}
               workerOptions={legendWorkers
@@ -744,8 +848,9 @@ const App: React.FC = () => {
                 }))}
               onPlanWorkerChange={(id) => activatePlanWorker(id)}
               notice={planNotice}
+              hint={hint}
               onClearEnd={() => setPlanEnd(null)}
-              onRemoveStop={(index) => setPlanStops((prev) => prev.filter((_, i) => i !== index))}
+              onRemoveStop={handleRemoveStop}
               onClear={clearPlanWithUndo}
               // Cambiar la partida empieza la ruta de nuevo (se puede deshacer)
               onClearOrigin={clearPlanWithUndo}
@@ -786,19 +891,32 @@ const App: React.FC = () => {
           />
         </AppChrome>
         <Snackbar
-          open={undoPlan != null}
+          open={undo != null}
           autoHideDuration={6000}
           onClose={(_, reason) => {
-            if (reason !== 'clickaway') setUndoPlan(null);
+            if (reason !== 'clickaway') setUndo(null);
           }}
-          message="Plan borrado"
+          message={undo?.message}
           action={
-            <Button color="secondary" size="small" onClick={handleUndoClear} sx={{ fontWeight: 700 }}>
+            <Button
+              color="secondary"
+              size="small"
+              onClick={() => {
+                undo?.restore();
+                setUndo(null);
+              }}
+              sx={{ fontWeight: 700 }}
+            >
               Deshacer
             </Button>
           }
           anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
-          sx={{ bottom: { xs: 'calc(76px + env(safe-area-inset-bottom, 0px))', md: 24 } }}
+          // Por encima de la barra inferior y, si se ve, de la franja del plan
+          sx={{
+            bottom: planningMode
+              ? 'calc(136px + env(safe-area-inset-bottom, 0px)) !important'
+              : 'calc(76px + env(safe-area-inset-bottom, 0px)) !important',
+          }}
         />
       </AuthGuard>
     </div>

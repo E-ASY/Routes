@@ -206,6 +206,6 @@ body, html {
 
 @media (max-width: 399px) {
   .AppChrome-bar button span:last-child {
-    font-size: 0.52rem !important;
+    font-size: 0.64rem !important;
   }
 }

@@ -94,10 +94,6 @@ interface VisitPlanPanelProps {
   onFinishChange: (finish: PlanFinish) => void;
   /** Llegada elegida cuando finish === 'custom' */
   end: VisitPlanPoint | null;
-  /** Ya hay visitas: tocar el mapa o la trabajadora fija o mueve la llegada */
-  endEditable: boolean;
-  /** Aún sin visitas: tocar el mapa o la trabajadora mueve la partida */
-  originEditable: boolean;
   /** Trabajadora a la que pertenece la ruta que se está editando */
   planWorkerLabel: string | null;
   planWorkerId: string | null;
@@ -106,6 +102,8 @@ interface VisitPlanPanelProps {
   onPlanWorkerChange: (id: string) => void;
   /** Aviso temporal, p. ej. al tocar una usuaria de otra trabajadora */
   notice: string | null;
+  /** Siguiente paso (el mismo que la franja sobre el mapa) */
+  hint: string;
   onClearEnd: () => void;
   onRemoveStop: (index: number) => void;
   onClear: () => void;
@@ -151,7 +149,12 @@ const PlaceRow: React.FC<{
       </Typography>
     </Box>
     {value && onClear && (
-      <IconButton aria-label={clearLabel} onClick={onClear} size="small" sx={{ color: 'text.secondary' }}>
+      <IconButton
+        aria-label={clearLabel}
+        onClick={onClear}
+        size="small"
+        sx={{ width: 40, height: 40, mr: -1, color: 'text.secondary' }}
+      >
         <DeleteOutlineIcon fontSize="small" />
       </IconButton>
     )}
@@ -169,13 +172,12 @@ const VisitPlanPanel: React.FC<VisitPlanPanelProps> = ({
   finish,
   onFinishChange,
   end,
-  endEditable,
-  originEditable,
   planWorkerLabel,
   planWorkerId,
   workerOptions,
   onPlanWorkerChange,
   notice,
+  hint,
   onClearEnd,
   onRemoveStop,
   onClear,
@@ -191,20 +193,6 @@ const VisitPlanPanel: React.FC<VisitPlanPanelProps> = ({
 
   const scheduleInputsValid =
     isValidRange(schedule.shift) && schedule.stopRanges.every((ranges) => ranges.every(isValidRange));
-  const hint = !planningMode
-    ? 'Actívalo para preparar la ruta y el horario de una trabajadora.'
-    : workerOptions.length === 0
-      ? 'Selecciona trabajadoras en Filtros para planificar.'
-      : !planWorkerId
-        ? 'Elige a qué trabajadora planificar.'
-        : !origin
-          ? 'Toca en el mapa el sitio de salida, una usuaria o la casa de la trabajadora.'
-          : originEditable
-            ? 'Ahora toca las usuarias que visitará hoy.'
-            : endEditable && !end
-              ? 'Toca usuarias para añadirlas y, al acabar, el sitio de llegada.'
-              : 'Toca más usuarias en el mapa para añadirlas.';
-
   const times = schedule.stopTimes;
   const closingKm =
     legs && legs.legs.length > stops.length ? legs.legs[legs.legs.length - 1]?.distance_km ?? null : null;
@@ -416,9 +404,7 @@ const VisitPlanPanel: React.FC<VisitPlanPanelProps> = ({
                 lineHeight: 1.45,
               }}
             >
-              {origin
-                ? 'Toca en el mapa las usuarias que visitará hoy.'
-                : 'Primero elige en el mapa desde dónde sale.'}
+              Aún no hay visitas.
             </Typography>
           ) : (
             <Box>
@@ -502,10 +488,15 @@ const VisitPlanPanel: React.FC<VisitPlanPanelProps> = ({
               >
                 Organizar
               </Button>
-              <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.5, lineHeight: 1.4 }}>
+              <Typography
+                variant="caption"
+                color={scheduleInputsValid ? 'text.secondary' : 'error'}
+                display="block"
+                sx={{ mt: 0.5, lineHeight: 1.4 }}
+              >
                 {!scheduleInputsValid
                   ? 'Revisa las horas: cada franja debe terminar después de empezar.'
-                  : 'Busca el mejor orden y horario con los horarios de cada usuaria. También puedes ordenarlas a mano con las flechas.'}
+                  : 'Organizar busca el mejor orden según el horario de cada usuaria.'}
               </Typography>
 
               {schedule.error && (
@@ -568,9 +559,9 @@ const VisitPlanPanel: React.FC<VisitPlanPanelProps> = ({
                     </Box>
                   )}
                   {schedule.afterShiftMin > 0 && (
-                    <Box sx={{ mb: 0.5 }}>Termina {schedule.afterShiftMin} min después de la jornada.</Box>
+                    <Box sx={{ mb: 0.5 }}>La jornada se alarga {schedule.afterShiftMin} min.</Box>
                   )}
-                  Tú decides: puedes mantenerlo así, quitar alguna visita con la papelera o cambiar el orden.
+                  Puedes dejarlo así, quitar visitas o cambiar el orden.
                 </Alert>
               )}
               {!schedule.manualLoading && schedule.isManual && !hasConflicts && (

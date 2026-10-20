@@ -26,6 +26,8 @@ interface AppChromeProps {
   data: React.ReactNode;
   children: React.ReactNode;
   planningActive?: boolean;
+  /** Franja sobre el mapa mientras no hay panel abierto; recibe cómo abrir un panel */
+  statusBar?: (openSheet: (sheet: Exclude<ChromeSheet, null>) => void) => React.ReactNode;
 }
 
 const NAV_ITEMS: {
@@ -58,6 +60,7 @@ const AppChrome: React.FC<AppChromeProps> = ({
   data,
   children,
   planningActive = false,
+  statusBar,
 }) => {
   const theme = useTheme();
   const isDesktop = useMediaQuery(theme.breakpoints.up('md'));
@@ -220,6 +223,8 @@ const AppChrome: React.FC<AppChromeProps> = ({
         </Drawer>
       )}
 
+      {sheet == null && statusBar?.(setSheet)}
+
       <Box
         className="AppChrome-bar"
         sx={{
@@ -286,7 +291,7 @@ const AppChrome: React.FC<AppChromeProps> = ({
               <Typography
                 component="span"
                 sx={{
-                  fontSize: '0.58rem',
+                  fontSize: '0.7rem',
                   fontWeight: selected ? 700 : 500,
                   letterSpacing: '0.03em',
                   lineHeight: 1,

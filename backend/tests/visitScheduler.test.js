@@ -147,6 +147,15 @@ describe('startIntervals', () => {
       []
     );
   });
+
+  it('horario blando: el final de la jornada no limita la visita, pero debe empezar dentro', () => {
+    const shift = { start: H(8), end: H(15) };
+    assert.deepEqual(startIntervals([], shift, 60, true), [[H(8), Infinity]]);
+    // Franja 14–17: puede empezar hasta las 16 aunque la jornada acabe a las 15
+    assert.deepEqual(startIntervals([{ start: H(14), end: H(17) }], shift, 60, true), [[H(14), H(16)]]);
+    // Franja que empieza después de la jornada: fuera
+    assert.deepEqual(startIntervals([{ start: H(16), end: H(18) }], shift, 60, true), []);
+  });
 });
 
 describe('scheduleVisits', () => {
@@ -323,6 +332,27 @@ describe('evaluateOrder (orden manual)', () => {
     assert.equal(r.option.visits[1].late, 80);
     assert.ok(r.after_shift_min > 0);
   });
+
+  it('pasarse de la jornada no es llegar tarde: solo alarga la jornada', () => {
+    // Jornada 8–10, sin franjas: A 8:10–9:10, B 9:20–10:20 y vuelta a las 10:30
+    const r = evaluateOrder({ ...base, shift: { start: H(8), end: H(10) }, windows: [[], []] });
+    assert.deepEqual(r.conflicts, []);
+    assert.equal(r.option.late_min, 0);
+    assert.equal(r.option.visits[1].start, H(9, 20));
+    assert.equal(r.after_shift_min, 30);
+    assert.equal(r.option.overtime_min, 30);
+  });
+
+  it('franja que sigue después de la jornada: dentro de su franja no llega tarde', () => {
+    // B disponible de 9 a 11; la jornada acaba a las 10
+    const r = evaluateOrder({
+      ...base,
+      shift: { start: H(8), end: H(10) },
+      windows: [[], [{ start: H(9), end: H(11) }]],
+    });
+    assert.deepEqual(r.conflicts, []);
+    assert.equal(r.after_shift_min, 30);
+  });
 });
 
 describe('planDay (solo se apartan las visitas imposibles)', () => {
@@ -373,6 +403,9 @@ describe('planDay (solo se apartan las visitas imposibles)', () => {
     // Las 2 que caben sin viajes se mantienen; con viajes se pasa de la jornada
     assert.equal(r.options[0].visits.length, 2);
     assert.ok(r.options[0].overtime_min > 0);
+    // Alargar la jornada no es llegar tarde a ninguna visita
+    assert.equal(r.options[0].late_min, 0);
+    assert.ok(r.options[0].visits.every((v) => v.late === 0));
   });
 
   it('si todo cabe a tiempo coincide con scheduleVisits', () => {

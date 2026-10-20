@@ -13,6 +13,9 @@ import { AvailabilityEditor, FixedTimeEditor } from './visit_schedule';
 /** Mismo azul que el número de la visita en el mapa */
 const STOP_BLUE = '#1e40af';
 
+/** Zona táctil de 40 px aunque el icono sea pequeño (dedo en el móvil) */
+const TOUCH_TARGET = { width: 40, height: 40, color: 'text.secondary' } as const;
+
 /** Cabecera de cada paso del panel: ① Ruta, ② Visitas, ③ Horario */
 export const StepHeader: React.FC<{
   step: number;
@@ -113,12 +116,11 @@ interface VisitCardProps {
   onRemove: () => void;
 }
 
-/** Texto del problema de una visita; sin franjas ni hora fija, el límite es la jornada */
+/** Texto del problema de una visita (pasarse de la jornada no es llegar tarde: va aparte) */
 function formatConflict(conflict: ScheduleConflict, fixed: number | null, ranges: TimeRange[]): string {
   if (conflict.type === 'outside_window') return 'Su horario no coincide con la jornada';
   const minutes = conflict.minutes ?? 0;
   if (fixed != null) return `Llega ${minutes} min tarde a su hora fija (${formatMinutes(fixed)})`;
-  if (ranges.length === 0) return `Acaba ${minutes} min después de la jornada`;
   return `Llega ${minutes} min tarde para su horario (${formatRanges(ranges)})`;
 }
 
@@ -198,7 +200,7 @@ export const VisitCard: React.FC<VisitCardProps> = ({
             aria-label={`quitar visita ${index + 1}`}
             onClick={onRemove}
             size="small"
-            sx={{ color: 'text.secondary', mt: -0.5, mr: -0.5 }}
+            sx={{ ...TOUCH_TARGET, mt: -1, mr: -1 }}
           >
             <DeleteOutlineIcon fontSize="small" />
           </IconButton>
@@ -239,7 +241,7 @@ export const VisitCard: React.FC<VisitCardProps> = ({
             disabled={index === 0}
             onClick={() => onMove(-1)}
             size="small"
-            sx={{ color: 'text.secondary' }}
+            sx={TOUCH_TARGET}
           >
             <ArrowUpwardIcon sx={{ fontSize: 18 }} />
           </IconButton>
@@ -248,7 +250,7 @@ export const VisitCard: React.FC<VisitCardProps> = ({
             disabled={index === count - 1}
             onClick={() => onMove(1)}
             size="small"
-            sx={{ color: 'text.secondary', mr: -0.5 }}
+            sx={{ ...TOUCH_TARGET, mr: -1 }}
           >
             <ArrowDownwardIcon sx={{ fontSize: 18 }} />
           </IconButton>

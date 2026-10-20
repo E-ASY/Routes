@@ -9,12 +9,19 @@ interface LegendProps {
   mileageByWorker?: MileageByWorker | null;
 }
 
-function formatKm(mileageByWorker: MileageByWorker | null | undefined, workerId: string): string {
+function formatKm(mileageByWorker: MileageByWorker | null | undefined, workerId: string): string | null {
   const entry = mileageByWorker?.[String(workerId)];
   if (!entry || entry.legs_with_distance <= 0) {
-    return '—';
+    return null;
   }
-  return `${entry.distance_km.toFixed(1)} km`;
+  return `${entry.distance_km.toFixed(1)} km de ruta`;
+}
+
+/** Horas disponibles de la trabajadora; null si Velneo no trae el dato */
+function formatHours(value: number | string | undefined): string | null {
+  const hours = typeof value === 'number' ? value : Number(value);
+  if (value == null || value === '' || !Number.isFinite(hours)) return null;
+  return `${Number.isInteger(hours) ? hours : hours.toFixed(1).replace('.', ',')} h disponibles`;
 }
 
 const Legend: React.FC<LegendProps> = ({ workersInfo, mileageByWorker }) => {
@@ -34,7 +41,7 @@ const Legend: React.FC<LegendProps> = ({ workersInfo, mileageByWorker }) => {
         display="block"
         sx={{ mb: 1, lineHeight: 1.4 }}
       >
-        Color = usuaria · Rojo = trabajadora
+        Cada color es una trabajadora y sus usuarias. La casa marca su domicilio.
       </Typography>
       <List disablePadding>
         {workersInfo.map((info, index) => (
@@ -49,7 +56,9 @@ const Legend: React.FC<LegendProps> = ({ workersInfo, mileageByWorker }) => {
                 secondary={
                   <Box component="span" sx={{ display: 'block', mt: 0.2 }}>
                     <Typography component="span" variant="caption" color="text.secondary" display="block">
-                      {info.disponibilidad ?? 'N/A'} h · {formatKm(mileageByWorker, String(info.id))}
+                      {[formatHours(info.disponibilidad), formatKm(mileageByWorker, String(info.id))]
+                        .filter(Boolean)
+                        .join(' · ')}
                     </Typography>
                   </Box>
                 }

@@ -26,6 +26,8 @@ export interface DayDraft {
   /** Planes de las demás trabajadoras seleccionadas */
   savedPlans: Record<string, SavedPlan>;
   fixedStarts: Record<string, number>;
+  /** "Tu orden" de la trabajadora activa si difiere del actual (se aplicó una opción) */
+  ownStops?: VisitPlanPoint[];
   /** Ya se había organizado el horario: al volver se recalculan las horas */
   scheduled: boolean;
 }

@@ -51,16 +51,24 @@ const GOALS = ['distance', 'finish', 'idle'];
 /**
  * Intervalos de inicio válidos [a, b] de una visita: la visita [s, s + service]
  * debe caber en una franja y dentro de la jornada. Sin franjas = toda la jornada.
+ *
+ * Con `openEnd` (horario blando) el final de la jornada no limita cada visita:
+ * pasarse de la jornada se cuenta una sola vez, como jornada alargada (overtime),
+ * y "llegar tarde" queda solo para la franja de la usuaria o su hora fija. La
+ * visita sí debe empezar dentro de la jornada.
  * @param {Array<{start:number, end:number}>} windows - minutos desde medianoche
  * @param {{start:number, end:number}} shift
  * @param {number} service
+ * @param {boolean} [openEnd]
  * @returns {Array<[number, number]>}
  */
-function startIntervals(windows, shift, service) {
-  const source = Array.isArray(windows) && windows.length > 0 ? windows : [shift];
+function startIntervals(windows, shift, service, openEnd = false) {
+  const hasWindows = Array.isArray(windows) && windows.length > 0;
+  if (openEnd && !hasWindows) return [[shift.start, Infinity]];
+  const source = hasWindows ? windows : [shift];
   const intervals = source
-    .map((w) => [Math.max(w.start, shift.start), Math.min(w.end, shift.end) - service])
-    .filter(([a, b]) => a <= b + EPS)
+    .map((w) => [Math.max(w.start, shift.start), (openEnd ? w.end : Math.min(w.end, shift.end)) - service])
+    .filter(([a, b]) => a <= b + EPS && (!openEnd || a < shift.end - EPS))
     .sort((x, y) => x[0] - y[0]);
   // Unir franjas solapadas
   const merged = [];
@@ -223,7 +231,9 @@ function scheduleVisits(input) {
   if (!(shift.end > shift.start)) throw new Error('La jornada debe acabar después de empezar');
   if (m > 20) throw new Error(`Demasiadas visitas (${m})`);
 
-  const intervals = visitNodes.map((_, i) => startIntervals(input.windows?.[i], shift, service));
+  const sequential = Boolean(input.sequential);
+  const soft = Boolean(input.soft);
+  const intervals = visitNodes.map((_, i) => startIntervals(input.windows?.[i], shift, service, soft));
   const closing = (node) =>
     finish === 'start' ? T[node][origin] : finish === 'custom' ? T[node][endNode] : 0;
 
@@ -232,8 +242,6 @@ function scheduleVisits(input) {
   let truncated = false;
   const ctx = { T, D, origin, endNode, finish, service, shift };
 
-  const sequential = Boolean(input.sequential);
-  const soft = Boolean(input.soft);
   // Con franjas duras no se puede acabar una visita después de la jornada
   const pastShift = (label) => !soft && label.E > shift.end + EPS;
 
@@ -501,7 +509,7 @@ function evaluateOrder(input) {
   for (let j = 0; j < m; j++) {
     const node = input.visits[j];
     const arrival = t + T[prevNode][node];
-    const options = startIntervals(input.windows?.[j], shift, service);
+    const options = startIntervals(input.windows?.[j], shift, service, true);
     let interval = options.find(([, b]) => b >= arrival - EPS);
     let start;
     if (interval) {
