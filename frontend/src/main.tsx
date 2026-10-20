@@ -16,6 +16,7 @@ import {
   PlanFinish,
   ManualScheduleResult,
   ScheduleGoal,
+  ScheduleOption,
   ScheduleResult,
   TimeRange,
   VisitPlanPoint,
@@ -23,28 +24,26 @@ import {
   mapsService,
 } from './services/map_service';
 import { isValidRange } from './services/time_ranges';
+import { formatPersonName } from './services/person_name';
+import {
+  SavedPlan,
+  loadAvailability,
+  loadDayDraft,
+  saveAvailability,
+  saveDayDraft,
+} from './services/plan_storage';
 import { Box, Button, Snackbar, Typography } from '@mui/material';
 
 function formatWorkerName(point: MapPoint): string {
-  return [point.workerName, point.workerApe1, point.workerApe2].filter(Boolean).join(' ') || 'Trabajadora';
+  return formatPersonName(point.workerName, point.workerApe1, point.workerApe2) || 'Trabajadora';
 }
 
 function formatMapPointLabel(point: MapPoint): string {
   if (point.kind === 'worker') {
     return formatWorkerName(point);
   }
-  const name = [point.userName, point.userApe1, point.userApe2].filter(Boolean).join(' ');
+  const name = formatPersonName(point.userName, point.userApe1, point.userApe2);
   return name || `Usuaria ${point.userId ?? ''}`;
-}
-
-/** Plan guardado de una trabajadora mientras se planifica a otra */
-interface SavedPlan {
-  origin: VisitPlanPoint | null;
-  stops: VisitPlanPoint[];
-  end: VisitPlanPoint | null;
-  finish: PlanFinish;
-  shift: TimeRange;
-  postponed: VisitPlanPoint[];
 }
 
 /** Jornada por defecto: 08:00–15:00 (minutos desde medianoche) */
@@ -70,14 +69,23 @@ interface ScheduleRun {
   selected: number | null;
   /** Visitas tal como quedaron al aplicar la opción elegida */
   appliedStops: VisitPlanPoint[] | null;
+  /** Horario del orden que había al pulsar Organizar ("Tu orden"); null si no se pudo calcular */
+  own: ManualScheduleResult | null;
+}
+
+/** La opción deja las visitas en el orden enviado y no aparta ninguna */
+function isSentOrder(option: ScheduleOption): boolean {
+  return option.unscheduled.length === 0 && option.order.every((visit, i) => visit === i);
 }
 
 function formatWorkerFullName(worker: Worker): string {
-  return [worker.name, worker.ape_1, worker.ape_2].filter(Boolean).join(' ') || `Trabajadora ${worker.id}`;
+  return formatPersonName(worker.name, worker.ape_1, worker.ape_2) || `Trabajadora ${worker.id}`;
 }
 
 const App: React.FC = () => {
-  const [workers, setWorkers] = useState<string[]>([]);
+  // Plan de hoy guardado en el navegador (por si el móvil cerró la pestaña)
+  const [initialDraft] = useState(loadDayDraft);
+  const [workers, setWorkers] = useState<string[]>(initialDraft?.workers ?? []);
   const [points, setPoints] = useState<MapPoint[] | null>(null);
   const [routes, setRoutes] = useState<any[] | null>(null);
   const [legendWorkers, setLegendWorkers] = useState<Worker[]>([]);
@@ -85,16 +93,16 @@ const App: React.FC = () => {
   const [viewportLoading, setViewportLoading] = useState(false);
   const [viewportKey, setViewportKey] = useState(0);
 
-  const [planningMode, setPlanningMode] = useState(false);
-  const [planOrigin, setPlanOrigin] = useState<VisitPlanPoint | null>(null);
-  const [planStops, setPlanStops] = useState<VisitPlanPoint[]>([]);
+  const [planningMode, setPlanningMode] = useState(initialDraft?.planningMode ?? false);
+  const [planOrigin, setPlanOrigin] = useState<VisitPlanPoint | null>(initialDraft?.current.origin ?? null);
+  const [planStops, setPlanStops] = useState<VisitPlanPoint[]>(initialDraft?.current.stops ?? []);
   const [planLegs, setPlanLegs] = useState<LegsResult | null>(null);
   const [legsLoading, setLegsLoading] = useState(false);
   const [legsError, setLegsError] = useState<string | null>(null);
   // Por defecto la trabajadora vuelve a la partida al terminar (circuito): cuenta el tramo de vuelta.
   // Con 'custom' acaba en otro sitio (planEnd), que no se reordena al organizar.
-  const [planFinish, setPlanFinish] = useState<PlanFinish>('start');
-  const [planEnd, setPlanEnd] = useState<VisitPlanPoint | null>(null);
+  const [planFinish, setPlanFinish] = useState<PlanFinish>(initialDraft?.current.finish ?? 'start');
+  const [planEnd, setPlanEnd] = useState<VisitPlanPoint | null>(initialDraft?.current.end ?? null);
   const planReturnToStart = planFinish === 'start';
   const activeEnd = planFinish === 'custom' ? planEnd : null;
   // Con 'custom', la llegada se elige al final: tras la primera visita, tocar el mapa o la
@@ -111,8 +119,8 @@ const App: React.FC = () => {
   const originEditableRef = React.useRef(false);
   originEditableRef.current = originEditable;
   // Se planifica a una trabajadora cada vez; los planes de las demás seleccionadas se guardan
-  const [planWorkerId, setPlanWorkerId] = useState<string | null>(null);
-  const [savedPlans, setSavedPlans] = useState<Record<string, SavedPlan>>({});
+  const [planWorkerId, setPlanWorkerId] = useState<string | null>(initialDraft?.planWorkerId ?? null);
+  const [savedPlans, setSavedPlans] = useState<Record<string, SavedPlan>>(initialDraft?.savedPlans ?? {});
   const planWorker = legendWorkers.find((w) => String(w.id) === planWorkerId) ?? null;
   const planWorkerLabel = planWorker ? formatWorkerFullName(planWorker) : null;
   const planWorkerIdRef = React.useRef<string | null>(null);
@@ -124,9 +132,9 @@ const App: React.FC = () => {
   const [planNotice, setPlanNotice] = useState<string | null>(null);
 
   // PERF-013: horario del día. La disponibilidad es de la usuaria (vale para cualquier trabajadora)
-  const [planShift, setPlanShift] = useState<TimeRange>(DEFAULT_SHIFT);
-  const [availability, setAvailability] = useState<Record<string, TimeRange[]>>({});
-  const [postponed, setPostponed] = useState<VisitPlanPoint[]>([]);
+  const [planShift, setPlanShift] = useState<TimeRange>(initialDraft?.current.shift ?? DEFAULT_SHIFT);
+  const [availability, setAvailability] = useState<Record<string, TimeRange[]>>(loadAvailability);
+  const [postponed, setPostponed] = useState<VisitPlanPoint[]>(initialDraft?.current.postponed ?? []);
   const [scheduleRun, setScheduleRun] = useState<ScheduleRun | null>(null);
   const [scheduleLoading, setScheduleLoading] = useState(false);
   const [scheduleError, setScheduleError] = useState<string | null>(null);
@@ -135,7 +143,7 @@ const App: React.FC = () => {
     [availability]
   );
   // Hora fija elegida a mano para una usuaria (manda sobre sus franjas)
-  const [fixedStarts, setFixedStarts] = useState<Record<string, number>>({});
+  const [fixedStarts, setFixedStarts] = useState<Record<string, number>>(initialDraft?.fixedStarts ?? {});
   const fixedFor = useCallback(
     (stops: VisitPlanPoint[]) => stops.map((stop) => fixedStarts[stopKey(stop)] ?? null),
     [fixedStarts]
@@ -146,6 +154,8 @@ const App: React.FC = () => {
     null
   );
   const [manualLoading, setManualLoading] = useState(false);
+  // Plan recuperado que ya estaba organizado: recalcular sus horas sin volver a pulsar Organizar
+  const [resumeTimes, setResumeTimes] = useState(initialDraft?.scheduled ?? false);
 
   useEffect(() => {
     if (!planNotice) return;
@@ -240,12 +250,12 @@ const App: React.FC = () => {
         lat: p.lat,
         lon: p.lon,
       }));
-      const result = await mapsService.scheduleVisits(points, {
-        finish: planFinish,
-        shift: planShift,
-        windows,
-        fixedStarts: fixed,
-      });
+      const request = { finish: planFinish, shift: planShift, windows, fixedStarts: fixed };
+      // A la vez, el horario del orden actual para ofrecer volver a él ("Tu orden")
+      const [result, own] = await Promise.all([
+        mapsService.scheduleVisits(points, request),
+        mapsService.evaluateSchedule(points, { ...request, goal: scheduleGoal }).catch(() => null),
+      ]);
       setScheduleRun({
         result,
         stops,
@@ -255,6 +265,7 @@ const App: React.FC = () => {
         windowsKey: JSON.stringify([windows, fixed]),
         selected: null,
         appliedStops: null,
+        own,
       });
     } catch (err) {
       setScheduleRun(null);
@@ -262,7 +273,7 @@ const App: React.FC = () => {
     } finally {
       setScheduleLoading(false);
     }
-  }, [planOrigin, planStops, planFinish, activeEnd, planShift, rangesFor, fixedFor]);
+  }, [planOrigin, planStops, planFinish, activeEnd, planShift, rangesFor, fixedFor, scheduleGoal]);
 
   // El resultado solo vale con las mismas visitas (antes o después de aplicarlo), final, jornada y franjas
   const scheduleFresh =
@@ -278,6 +289,9 @@ const App: React.FC = () => {
       ? freshRun.result.options[freshRun.selected]
       : null;
   const shownOption = freshRun ? freshRun.result.options[freshRun.selected ?? 0] : undefined;
+  // "Tu orden": el que había al organizar. Si coincide con una opción, se marca esa opción
+  const ownMatchIndex = freshRun ? freshRun.result.options.findIndex(isSentOrder) : -1;
+  const onOwnOrder = freshRun != null && planStops === freshRun.stops;
 
   /** Aplica una opción: reordena las visitas y aparta para otro día las que no caben */
   const handleSelectScheduleOption = useCallback(
@@ -295,6 +309,15 @@ const App: React.FC = () => {
     [scheduleRun]
   );
 
+  /** Vuelve al orden que había al organizar; las visitas que apartó la opción vuelven a la ruta */
+  const handleSelectOwnOrder = useCallback(() => {
+    const run = scheduleRun;
+    if (!run) return;
+    setPlanStops(run.stops);
+    setPostponed((prev) => prev.filter((p) => !run.stops.includes(p)));
+    setScheduleRun({ ...run, selected: null, appliedStops: null });
+  }, [scheduleRun]);
+
   // Cambios a mano (orden u horas fijas): recalcular el horario de ese orden, con conflictos.
   // Solo si ya se organizó el horario o hay alguna hora fija, para no gastar llamadas a Google.
   const manualWindows = rangesFor(planStops);
@@ -307,7 +330,7 @@ const App: React.FC = () => {
     planStops.length > 0 &&
     !(planFinish === 'custom' && !activeEnd) &&
     manualInputsValid &&
-    (scheduleRun != null || manualFixed.some((t) => t != null));
+    (scheduleRun != null || resumeTimes || manualFixed.some((t) => t != null));
   const manualKey = manualEnabled
     ? JSON.stringify([
         [planOrigin, ...planStops, ...(activeEnd ? [activeEnd] : [])].map((p) => [p?.lat, p?.lon]),
@@ -391,11 +414,47 @@ const App: React.FC = () => {
     setPlanNotice(null);
     setPostponed([]);
     setScheduleRun(null);
+    setResumeTimes(false);
     setScheduleError(null);
   }, []);
 
+  // Guardar el plan en el navegador tras cada cambio
+  useEffect(() => {
+    saveDayDraft({
+      workers,
+      planningMode,
+      planWorkerId,
+      current: {
+        origin: planOrigin,
+        stops: planStops,
+        end: planEnd,
+        finish: planFinish,
+        shift: planShift,
+        postponed,
+      },
+      savedPlans,
+      fixedStarts,
+      scheduled: scheduleRun != null || resumeTimes,
+    });
+  }, [
+    workers,
+    planningMode,
+    planWorkerId,
+    planOrigin,
+    planStops,
+    planEnd,
+    planFinish,
+    planShift,
+    postponed,
+    savedPlans,
+    fixedStarts,
+    scheduleRun,
+    resumeTimes,
+  ]);
+  useEffect(() => saveAvailability(availability), [availability]);
+
   // "Limpiar" se puede deshacer durante unos segundos
-  const [undoPlan, setUndoPlan] = useState<(SavedPlan & { run: ScheduleRun | null }) | null>(null);
+  const [undoPlan, setUndoPlan] = useState<(SavedPlan & { run: ScheduleRun | null; resume: boolean }) | null>(null);
   const clearPlanWithUndo = useCallback(() => {
     setUndoPlan({
       origin: planOrigin,
@@ -405,9 +464,10 @@ const App: React.FC = () => {
       shift: planShift,
       postponed,
       run: scheduleRun,
+      resume: resumeTimes,
     });
     clearPlan();
-  }, [planOrigin, planStops, planEnd, planFinish, planShift, postponed, scheduleRun, clearPlan]);
+  }, [planOrigin, planStops, planEnd, planFinish, planShift, postponed, scheduleRun, resumeTimes, clearPlan]);
   const handleUndoClear = () => {
     if (!undoPlan) return;
     setPlanOrigin(undoPlan.origin);
@@ -417,6 +477,7 @@ const App: React.FC = () => {
     setPlanShift(undoPlan.shift);
     setPostponed(undoPlan.postponed);
     setScheduleRun(undoPlan.run);
+    setResumeTimes(undoPlan.resume);
     setUndoPlan(null);
   };
 
@@ -438,7 +499,8 @@ const App: React.FC = () => {
         current.stops.length > 0 ||
         current.end != null ||
         current.postponed.length > 0 ||
-        current.shift !== DEFAULT_SHIFT;
+        current.shift.start !== DEFAULT_SHIFT.start ||
+        current.shift.end !== DEFAULT_SHIFT.end;
       const next = nextId != null ? savedPlans[nextId] : undefined;
       setSavedPlans((prev) => {
         const updated = { ...prev };
@@ -599,7 +661,12 @@ const App: React.FC = () => {
     error: scheduleError,
     onSchedule: handleSchedule,
     options: freshRun ? freshRun.result.options : null,
-    selectedOption: freshRun?.selected ?? null,
+    selectedOption: onOwnOrder ? (ownMatchIndex >= 0 ? ownMatchIndex : null) : freshRun?.selected ?? null,
+    ownOrder:
+      freshRun && ownMatchIndex < 0
+        ? { option: freshRun.own?.option ?? null, selected: onOwnOrder, onSelect: handleSelectOwnOrder }
+        : null,
+    ownMatchIndex: ownMatchIndex >= 0 ? ownMatchIndex : null,
     onSelectOption: handleSelectScheduleOption,
     unscheduled:
       freshRun && shownOption

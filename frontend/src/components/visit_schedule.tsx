@@ -187,42 +187,74 @@ function formatOptionDelays(option: ScheduleOption): string | null {
   return parts.length > 0 ? parts.join(' · ') : null;
 }
 
-/** Opciones de horario para que la trabajadora elija una */
+/** Fila "Tu orden": el orden que tenía la trabajadora al pulsar Organizar */
+export interface OwnOrderRow {
+  /** Su horario; null si no se pudo calcular */
+  option: ScheduleOption | null;
+  selected: boolean;
+  onSelect: () => void;
+}
+
+const OptionRow: React.FC<{
+  label: string;
+  option: ScheduleOption | null;
+  selected: boolean;
+  onClick: () => void;
+}> = ({ label, option, selected, onClick }) => (
+  <ListItemButton
+    selected={selected}
+    onClick={onClick}
+    sx={{
+      borderRadius: 1,
+      border: 1,
+      borderColor: selected ? 'primary.main' : 'divider',
+      mb: 0.75,
+      minHeight: 48,
+    }}
+  >
+    <ListItemText
+      primary={label}
+      secondary={
+        option ? (
+          <>
+            {formatOptionDetail(option)}
+            {formatOptionDelays(option) && (
+              <Typography component="span" variant="caption" display="block" sx={{ color: 'warning.dark' }}>
+                {formatOptionDelays(option)}
+              </Typography>
+            )}
+          </>
+        ) : (
+          'Las visitas en el orden en que las tenías'
+        )
+      }
+      primaryTypographyProps={{ variant: 'body2', fontWeight: 600 }}
+      secondaryTypographyProps={{ variant: 'caption' }}
+    />
+  </ListItemButton>
+);
+
+/** Opciones de horario para que la trabajadora elija una, más volver a su orden */
 export const ScheduleOptions: React.FC<{
   options: ScheduleOption[];
   selected: number | null;
   onSelect: (index: number) => void;
-}> = ({ options, selected, onSelect }) => (
+  own?: OwnOrderRow | null;
+  /** Opción que coincide con el orden de la trabajadora */
+  ownMatchIndex?: number | null;
+}> = ({ options, selected, onSelect, own, ownMatchIndex }) => (
   <List dense disablePadding sx={{ mt: 1 }}>
+    {own && <OptionRow label="Tu orden" option={own.option} selected={own.selected} onClick={own.onSelect} />}
     {options.map((option, index) => (
-      <ListItemButton
+      <OptionRow
         key={option.order.join(',')}
+        label={
+          option.goals.map((goal) => GOAL_LABELS[goal]).join(' · ') + (ownMatchIndex === index ? ' · Tu orden' : '')
+        }
+        option={option}
         selected={selected === index}
         onClick={() => onSelect(index)}
-        sx={{
-          borderRadius: 1,
-          border: 1,
-          borderColor: selected === index ? 'primary.main' : 'divider',
-          mb: 0.75,
-          minHeight: 48,
-        }}
-      >
-        <ListItemText
-          primary={option.goals.map((goal) => GOAL_LABELS[goal]).join(' · ')}
-          secondary={
-            <>
-              {formatOptionDetail(option)}
-              {formatOptionDelays(option) && (
-                <Typography component="span" variant="caption" display="block" sx={{ color: 'warning.dark' }}>
-                  {formatOptionDelays(option)}
-                </Typography>
-              )}
-            </>
-          }
-          primaryTypographyProps={{ variant: 'body2', fontWeight: 600 }}
-          secondaryTypographyProps={{ variant: 'caption' }}
-        />
-      </ListItemButton>
+      />
     ))}
   </List>
 );

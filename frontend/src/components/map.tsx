@@ -10,6 +10,7 @@ import { CircularProgress, Backdrop, Paper, Typography } from '@mui/material';
 
 import { LegsResult, MapPoint, VisitPlanPoint } from '../services/map_service';
 import { formatMinutes } from '../services/time_ranges';
+import { formatPersonName } from '../services/person_name';
 
 interface MapProps {
   workers: string[];
@@ -38,25 +39,13 @@ function escapeHtml(value: unknown): string {
     .replace(/"/g, '&quot;');
 }
 
-function formatPersonName(name?: string, ape1?: string, ape2?: string): string {
-  const n = (name || '').trim();
-  const a1 = (ape1 || '').trim();
-  const a2 = (ape2 || '').trim();
-  if (!n && !a1 && !a2) return '—';
-  if (!n) return [a1, a2].filter(Boolean).join(' ');
-
-  const lower = n.toLocaleLowerCase('es');
-  const alreadyHasApe =
-    (Boolean(a1) && lower.includes(a1.toLocaleLowerCase('es'))) ||
-    (Boolean(a2) && lower.includes(a2.toLocaleLowerCase('es')));
-  if (alreadyHasApe) return n;
-
-  return [n, a1, a2].filter(Boolean).join(' ');
+function formatTooltipName(name?: string, ape1?: string, ape2?: string): string {
+  return formatPersonName(name, ape1, ape2) || '—';
 }
 
 function pointTooltipHtml(point: MapPoint): string {
   if (point.kind === 'worker') {
-    const workerFull = formatPersonName(point.workerName, point.workerApe1, point.workerApe2);
+    const workerFull = formatTooltipName(point.workerName, point.workerApe1, point.workerApe2);
     const cif = point.workerCif ? escapeHtml(point.workerCif) : '—';
     return `
       <div style="font-family:system-ui,sans-serif;font-size:12px;line-height:1.45;max-width:260px">
@@ -67,8 +56,8 @@ function pointTooltipHtml(point: MapPoint): string {
     `;
   }
 
-  const userFull = formatPersonName(point.userName, point.userApe1, point.userApe2);
-  const workerFull = formatPersonName(point.workerName, point.workerApe1, point.workerApe2);
+  const userFull = formatTooltipName(point.userName, point.userApe1, point.userApe2);
+  const workerFull = formatTooltipName(point.workerName, point.workerApe1, point.workerApe2);
   const cif = point.userCif ? escapeHtml(point.userCif) : '—';
   const mun = point.userMunId != null && point.userMunId !== ''
     ? escapeHtml(point.userMunId)

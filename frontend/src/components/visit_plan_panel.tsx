@@ -37,7 +37,7 @@ import {
 import { MAX_GOOGLE_MAPS_WAYPOINTS, buildGoogleMapsLinks } from '../services/google_maps_link';
 import { buildAgendaText } from '../services/plan_text';
 import { formatMinutes, isValidRange } from '../services/time_ranges';
-import { PostponedList, ScheduleOptions, ShiftEditor, UnscheduledAlert } from './visit_schedule';
+import { OwnOrderRow, PostponedList, ScheduleOptions, ShiftEditor, UnscheduledAlert } from './visit_schedule';
 import { AgendaEndpoint, StepHeader, TravelRow, VisitCard } from './visit_agenda';
 
 /** PERF-013: horario del día (jornada, franjas por usuaria y opciones calculadas) */
@@ -55,6 +55,10 @@ export interface PlanSchedule {
   options: ScheduleOption[] | null;
   selectedOption: number | null;
   onSelectOption: (index: number) => void;
+  /** Fila "Tu orden" (el orden que había al organizar); null si coincide con una opción */
+  ownOrder: OwnOrderRow | null;
+  /** Opción que coincide con el orden que había al organizar */
+  ownMatchIndex: number | null;
   unscheduled: { stop: VisitPlanPoint; reason: UnscheduledVisit['reason'] }[];
   /** Algún tiempo de viaje es estimado (Google no respondió) */
   estimatedTravel: boolean;
@@ -528,15 +532,19 @@ const VisitPlanPanel: React.FC<VisitPlanPanelProps> = ({
                     display="block"
                     sx={{ mt: 1.25, color: 'text.secondary', lineHeight: 1.4 }}
                   >
-                    {schedule.options.length === 1
-                      ? 'Este horario es el mejor en km, hora de fin y esperas. Tócalo para aplicarlo.'
-                      : 'Elige el horario que prefieras:'}
+                    {schedule.options.length === 1 && schedule.ownMatchIndex === 0
+                      ? 'Tu orden ya es el mejor en km, hora de fin y esperas.'
+                      : schedule.options.length === 1 && !schedule.ownOrder
+                        ? 'Este horario es el mejor en km, hora de fin y esperas. Tócalo para aplicarlo.'
+                        : 'Elige el horario que prefieras. Puedes volver a tu orden cuando quieras.'}
                     {schedule.estimatedTravel ? ' (Tiempos de viaje estimados: Google no respondió.)' : ''}
                   </Typography>
                   <ScheduleOptions
                     options={schedule.options}
                     selected={schedule.selectedOption}
                     onSelect={schedule.onSelectOption}
+                    own={schedule.ownOrder}
+                    ownMatchIndex={schedule.ownMatchIndex}
                   />
                 </>
               )}

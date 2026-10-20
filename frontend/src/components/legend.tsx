@@ -2,6 +2,7 @@ import React from 'react';
 import { List, ListItem, ListItemText, ListItemIcon, Box, Typography, Divider } from '@mui/material';
 import CircleIcon from '@mui/icons-material/Circle';
 import { MileageByWorker, Worker } from '../services/map_service';
+import { formatPersonName } from '../services/person_name';
 
 interface LegendProps {
   workersInfo: Worker[];
@@ -44,7 +45,7 @@ const Legend: React.FC<LegendProps> = ({ workersInfo, mileageByWorker }) => {
                 <CircleIcon sx={{ color: staticColors[index % staticColors.length], fontSize: 10 }} />
               </ListItemIcon>
               <ListItemText
-                primary={`${info.name} ${info.ape_1} ${info.ape_2}`}
+                primary={formatPersonName(info.name, info.ape_1, info.ape_2)}
                 secondary={
                   <Box component="span" sx={{ display: 'block', mt: 0.2 }}>
                     <Typography component="span" variant="caption" color="text.secondary" display="block">

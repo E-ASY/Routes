@@ -1,4 +1,5 @@
 import { apiRequest } from './config';
+import { clearSavedPlanData } from './plan_storage';
 
 /**
  * Interfaz que define la estructura de datos de un usuario autenticado
@@ -59,6 +60,7 @@ export const authService = {
    * Evita CSRF por simple GET cross-site a /logout.
    */
   logout(): void {
+    clearSavedPlanData();
     const form = document.createElement('form');
     form.method = 'POST';
     form.action = `${BACKEND_URL}/auth/logout`;
