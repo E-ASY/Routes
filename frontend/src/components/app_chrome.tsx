@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React from 'react';
 import {
   Box,
   Drawer,
@@ -20,6 +20,9 @@ import UserInfoPanel from './user_info';
 export type ChromeSheet = 'filters' | 'plan' | 'legend' | 'data' | 'account' | null;
 
 interface AppChromeProps {
+  /** Panel abierto; lo controla App (el plan puede abrirlo o cerrarlo) */
+  sheet: ChromeSheet;
+  onSheetChange: (sheet: ChromeSheet) => void;
   filters: React.ReactNode;
   plan: React.ReactNode;
   legend: React.ReactNode;
@@ -54,6 +57,8 @@ const SURFACE =
   'linear-gradient(165deg, rgba(236, 244, 241, 0.96) 0%, rgba(220, 232, 228, 0.97) 48%, rgba(210, 224, 220, 0.98) 100%)';
 
 const AppChrome: React.FC<AppChromeProps> = ({
+  sheet,
+  onSheetChange,
   filters,
   plan,
   legend,
@@ -65,13 +70,11 @@ const AppChrome: React.FC<AppChromeProps> = ({
   const theme = useTheme();
   const isDesktop = useMediaQuery(theme.breakpoints.up('md'));
   const { user, onLogout } = useAuthSession();
-  const [sheet, setSheet] = useState<ChromeSheet>(null);
-
   const openSheet = (next: ChromeSheet) => {
-    setSheet((prev) => (prev === next ? null : next));
+    onSheetChange(sheet === next ? null : next);
   };
 
-  const closeSheet = () => setSheet(null);
+  const closeSheet = () => onSheetChange(null);
   // El panel de planificación lleva agenda y horas: más ancho y más alto que el resto
   const wide = sheet === 'plan';
 
@@ -223,7 +226,7 @@ const AppChrome: React.FC<AppChromeProps> = ({
         </Drawer>
       )}
 
-      {sheet == null && statusBar?.(setSheet)}
+      {sheet == null && statusBar?.(onSheetChange)}
 
       <Box
         className="AppChrome-bar"

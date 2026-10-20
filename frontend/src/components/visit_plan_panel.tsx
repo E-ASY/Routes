@@ -18,6 +18,7 @@ import { alpha } from '@mui/material/styles';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import ShareIcon from '@mui/icons-material/Share';
 import DeleteSweepOutlinedIcon from '@mui/icons-material/DeleteSweepOutlined';
 import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh';
 import TuneIcon from '@mui/icons-material/Tune';
@@ -37,6 +38,7 @@ import {
 import { MAX_GOOGLE_MAPS_WAYPOINTS, buildGoogleMapsLinks } from '../services/google_maps_link';
 import { buildAgendaText } from '../services/plan_text';
 import { formatMinutes, isValidRange } from '../services/time_ranges';
+import { formatDaySummary, summarizeDay } from '../services/plan_summary';
 import { OwnOrderRow, PostponedList, ScheduleOptions, ShiftEditor, UnscheduledAlert } from './visit_schedule';
 import { AgendaEndpoint, StepHeader, TravelRow, VisitCard } from './visit_agenda';
 
@@ -106,6 +108,14 @@ interface VisitPlanPanelProps {
   hint: string;
   onClearEnd: () => void;
   onRemoveStop: (index: number) => void;
+  /** Arrastrar una visita de `from` a `to` */
+  onReorderStop: (from: number, to: number) => void;
+  /** Cerrar el panel y centrar el mapa en la visita */
+  onLocateStop: (index: number) => void;
+  /** Visita resaltada (tocada en el mapa o en su tarjeta) */
+  selectedIndex: number | null;
+  /** Cambia al pedir "Ver tarjeta": desplazarse hasta la visita resaltada */
+  scrollToSelected: number;
   onClear: () => void;
   onClearOrigin: () => void;
   schedule: PlanSchedule;
@@ -123,7 +133,17 @@ function formatPersonLabel(point: VisitPlanPoint): string {
   return point.label || `${point.lat.toFixed(4)}, ${point.lon.toFixed(4)}`;
 }
 
-type CopyStatus = 'idle' | 'copied' | 'error';
+type CopyStatus = 'idle' | 'copied' | 'shared' | 'error';
+
+/** En el móvil la agenda se envía con el menú de compartir del teléfono; en el ordenador se copia */
+function canShareText(): boolean {
+  return (
+    typeof navigator !== 'undefined' &&
+    typeof navigator.share === 'function' &&
+    typeof window.matchMedia === 'function' &&
+    window.matchMedia('(pointer: coarse)').matches
+  );
+}
 
 /** Fila de "Sale de" / "Llega a" en el paso 1 */
 const PlaceRow: React.FC<{
@@ -180,6 +200,10 @@ const VisitPlanPanel: React.FC<VisitPlanPanelProps> = ({
   hint,
   onClearEnd,
   onRemoveStop,
+  onReorderStop,
+  onLocateStop,
+  selectedIndex,
+  scrollToSelected,
   onClear,
   onClearOrigin,
   schedule,
@@ -217,27 +241,100 @@ const VisitPlanPanel: React.FC<VisitPlanPanelProps> = ({
     const timer = window.setTimeout(() => setCopyStatus('idle'), 2000);
     return () => window.clearTimeout(timer);
   }, [copyStatus]);
+  const shareAgenda = canShareText();
   const handleCopyAgenda = async () => {
     if (!origin) return;
+    const text = buildAgendaText({
+      workerLabel: planWorkerLabel,
+      origin,
+      stops,
+      times,
+      departure: schedule.departure,
+      finishTime: schedule.finishTime,
+      finish,
+      end,
+      mapsLinks,
+    });
+    if (shareAgenda) {
+      try {
+        await navigator.share({ title: planWorkerLabel ? `Ruta de ${planWorkerLabel}` : 'Ruta', text });
+        setCopyStatus('shared');
+        return;
+      } catch (err) {
+        // Cerrar el menú de compartir no es un error; si falla de otra forma, se copia
+        if (err instanceof DOMException && err.name === 'AbortError') return;
+      }
+    }
     try {
-      await navigator.clipboard.writeText(
-        buildAgendaText({
-          workerLabel: planWorkerLabel,
-          origin,
-          stops,
-          times,
-          departure: schedule.departure,
-          finishTime: schedule.finishTime,
-          finish,
-          end,
-          mapsLinks,
-        })
-      );
+      await navigator.clipboard.writeText(text);
       setCopyStatus('copied');
     } catch {
       setCopyStatus('error');
     }
   };
+
+  // Arrastrar tarjetas: desde el asa, se suelta sobre otra tarjeta
+  const [drag, setDrag] = React.useState<{ from: number; over: number } | null>(null);
+  const startDrag = (from: number) => (event: React.PointerEvent<HTMLElement>) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    const scroller = event.currentTarget.closest('.AppChrome-sheetBody');
+    let over = from;
+    setDrag({ from, over });
+    const onMove = (e: PointerEvent) => {
+      // Cerca de los bordes del panel, se desplaza para poder llegar a cualquier visita
+      if (scroller) {
+        const rect = scroller.getBoundingClientRect();
+        if (e.clientY < rect.top + 48) scroller.scrollBy(0, -12);
+        else if (e.clientY > rect.bottom - 48) scroller.scrollBy(0, 12);
+      }
+      const card = document.elementFromPoint(e.clientX, e.clientY)?.closest('[data-stop-index]');
+      const index = card ? Number(card.getAttribute('data-stop-index')) : NaN;
+      if (Number.isInteger(index) && index !== over) {
+        over = index;
+        setDrag({ from, over });
+      }
+    };
+    const stop = (drop: boolean) => () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onCancel);
+      setDrag(null);
+      if (drop && over !== from) onReorderStop(from, over);
+    };
+    const onUp = stop(true);
+    const onCancel = stop(false);
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onCancel);
+  };
+
+  // "Ver tarjeta" desde el mapa: llevar la visita resaltada a la vista
+  React.useEffect(() => {
+    if (scrollToSelected === 0 || selectedIndex == null) return;
+    // Tras la animación de apertura del panel
+    const timer = window.setTimeout(() => {
+      document
+        .querySelector(`[data-stop-index="${selectedIndex}"]`)
+        ?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    }, 250);
+    return () => window.clearTimeout(timer);
+    // Solo al pedirlo; no al cambiar de visita resaltada
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scrollToSelected]);
+
+  const daySummary =
+    times && times.length === stops.length && schedule.departure != null && schedule.finishTime != null
+      ? formatDaySummary(
+          summarizeDay({
+            times,
+            departure: schedule.departure,
+            finishTime: schedule.finishTime,
+            serviceMinutes: schedule.serviceMinutes,
+            km: legs && !legsLoading ? legs.total_distance_km : null,
+          })
+        )
+      : null;
 
   const hasConflicts = schedule.conflicts.length > 0 || schedule.afterShiftMin > 0;
   const lateVisits = schedule.conflicts
@@ -432,6 +529,17 @@ const VisitPlanPanel: React.FC<VisitPlanPanelProps> = ({
                     onFixedChange={(minutes) => schedule.onFixedStartChange(index, minutes)}
                     onMove={(delta) => schedule.onMoveStop(index, delta)}
                     onRemove={() => onRemoveStop(index)}
+                    onLocate={() => onLocateStop(index)}
+                    selected={selectedIndex === index}
+                    dragging={drag?.from === index}
+                    dropSide={
+                      drag && drag.over === index && drag.from !== index
+                        ? drag.from < index
+                          ? 'after'
+                          : 'before'
+                        : null
+                    }
+                    onDragStart={startDrag(index)}
                   />
                 </React.Fragment>
               ))}
@@ -446,6 +554,24 @@ const VisitPlanPanel: React.FC<VisitPlanPanelProps> = ({
                   <TravelRow minutes={closingMinutes} km={closingKm} loading={legsLoading} />
                   <AgendaEndpoint time={schedule.finishTime} label="Llegada" place={formatPersonLabel(end)} />
                 </>
+              )}
+              {daySummary && (
+                <Typography
+                  variant="caption"
+                  display="block"
+                  sx={{
+                    mt: 1,
+                    px: 1,
+                    py: 0.75,
+                    borderRadius: 1.5,
+                    bgcolor: 'rgba(20, 50, 60, 0.05)',
+                    color: 'text.secondary',
+                    fontWeight: 600,
+                    lineHeight: 1.45,
+                  }}
+                >
+                  {daySummary}
+                </Typography>
               )}
             </Box>
           )}
@@ -586,16 +712,20 @@ const VisitPlanPanel: React.FC<VisitPlanPanelProps> = ({
                     variant="contained"
                     color="secondary"
                     disableElevation
-                    startIcon={<ContentCopyIcon />}
+                    startIcon={shareAgenda ? <ShareIcon /> : <ContentCopyIcon />}
                     onClick={handleCopyAgenda}
                     fullWidth
                     sx={{ minHeight: 44, fontSize: '0.88rem', backgroundImage: 'none' }}
                   >
                     {copyStatus === 'copied'
                       ? 'Copiado: pégalo en WhatsApp o un correo'
-                      : copyStatus === 'error'
-                        ? 'No se pudo copiar'
-                        : 'Copiar agenda para la trabajadora'}
+                      : copyStatus === 'shared'
+                        ? 'Agenda enviada'
+                        : copyStatus === 'error'
+                          ? 'No se pudo copiar'
+                          : shareAgenda
+                            ? 'Enviar agenda a la trabajadora'
+                            : 'Copiar agenda para la trabajadora'}
                   </Button>
                   <Box sx={{ display: 'flex', gap: 1, mt: 1, flexWrap: 'wrap' }}>
                     {mapsLinks.map((link, index) => (

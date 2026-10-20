@@ -7,7 +7,8 @@ import WorkerSelector from './components/worker_selector';
 import Legend from './components/legend';
 import DataRefresh from './components/data_refresh';
 import VisitPlanPanel, { PlanSchedule } from './components/visit_plan_panel';
-import AppChrome from './components/app_chrome';
+import AppChrome, { ChromeSheet } from './components/app_chrome';
+import ErrorBoundary from './components/error_boundary';
 import MapStrip from './components/map_strip';
 import AuthGuard from './components/auth/guard';
 import {
@@ -17,7 +18,6 @@ import {
   PlanFinish,
   ManualScheduleResult,
   ScheduleGoal,
-  ScheduleOption,
   ScheduleResult,
   TimeRange,
   VisitPlanPoint,
@@ -26,6 +26,7 @@ import {
 } from './services/map_service';
 import { formatMinutes, isValidRange } from './services/time_ranges';
 import { planHint } from './services/plan_hint';
+import { moveItem, optionMatchesOrder, sameVisits, stopKey } from './services/plan_order';
 import { formatPersonName } from './services/person_name';
 import {
   SavedPlan,
@@ -53,11 +54,6 @@ const DEFAULT_SHIFT: TimeRange = { start: 8 * 60, end: 15 * 60 };
 /** Duración de cada visita; fija por ahora */
 const VISIT_MINUTES = 60;
 
-/** Clave estable de una usuaria para guardar su disponibilidad aunque cambie el orden */
-function stopKey(stop: VisitPlanPoint): string {
-  return stop.userId != null ? `u${stop.userId}` : `${stop.lat},${stop.lon}`;
-}
-
 /** Última vez que se pulsó "Organizar horario" y la opción elegida */
 interface ScheduleRun {
   result: ScheduleResult;
@@ -75,22 +71,6 @@ interface ScheduleRun {
   ownStops: VisitPlanPoint[];
   /** Horario de `ownStops`; null si no se pudo calcular */
   own: ManualScheduleResult | null;
-}
-
-/** Mismas visitas, sin importar el orden */
-function sameVisits(a: VisitPlanPoint[], b: VisitPlanPoint[]): boolean {
-  if (a.length !== b.length) return false;
-  const keys = new Set(a.map(stopKey));
-  return b.every((stop) => keys.has(stopKey(stop)));
-}
-
-/** La opción deja las visitas en el orden `order` y no aparta ninguna */
-function optionMatchesOrder(option: ScheduleOption, stops: VisitPlanPoint[], order: VisitPlanPoint[]): boolean {
-  return (
-    option.unscheduled.length === 0 &&
-    option.order.length === order.length &&
-    option.order.every((visit, i) => stopKey(stops[visit]) === stopKey(order[i]))
-  );
 }
 
 function formatWorkerFullName(worker: Worker): string {
@@ -111,6 +91,8 @@ const App: React.FC = () => {
   const [planningMode, setPlanningMode] = useState(initialDraft?.planningMode ?? false);
   const [planOrigin, setPlanOrigin] = useState<VisitPlanPoint | null>(initialDraft?.current.origin ?? null);
   const [planStops, setPlanStops] = useState<VisitPlanPoint[]>(initialDraft?.current.stops ?? []);
+  const planStopsRef = React.useRef<VisitPlanPoint[]>(planStops);
+  planStopsRef.current = planStops;
   // "Tu orden": el último orden de visitas puesto a mano (no el de aplicar una opción)
   const [ownStops, setOwnStops] = useState<VisitPlanPoint[]>(initialDraft?.ownStops ?? planStops);
   const [initialAppliedOrders] = useState(() => {
@@ -157,6 +139,12 @@ const App: React.FC = () => {
   const pointsRef = React.useRef<MapPoint[] | null>(null);
   pointsRef.current = points;
   const [planNotice, setPlanNotice] = useState<string | null>(null);
+  // Panel abierto (controlado aquí para poder abrirlo o cerrarlo desde el plan y la franja)
+  const [sheet, setSheet] = useState<ChromeSheet>(null);
+  // Visita resaltada en el mapa y en la agenda (tocada en el mapa o en su tarjeta)
+  const [selectedStopKey, setSelectedStopKey] = useState<string | null>(null);
+  const [mapFocus, setMapFocus] = useState<{ lat: number; lon: number; nonce: number } | null>(null);
+  const [cardScrollNonce, setCardScrollNonce] = useState(0);
 
   // PERF-013: horario del día. La disponibilidad es de la usuaria (vale para cualquier trabajadora)
   const [planShift, setPlanShift] = useState<TimeRange>(initialDraft?.current.shift ?? DEFAULT_SHIFT);
@@ -423,6 +411,11 @@ const App: React.FC = () => {
 
   const manualResult = manualSchedule && manualSchedule.key === manualKey ? manualSchedule.result : null;
 
+  /** Arrastrar en la agenda: lleva la visita de `from` a la posición `to` */
+  const handleReorderStop = useCallback((from: number, to: number) => {
+    setPlanStops((prev) => moveItem(prev, from, to));
+  }, []);
+
   /** Mueve una visita arriba (−1) o abajo (+1) en el orden */
   const handleMoveStop = useCallback((index: number, delta: number) => {
     setPlanStops((prev) => {
@@ -608,6 +601,22 @@ const App: React.FC = () => {
   const handlePlanningModeChange = (enabled: boolean) => {
     setPlanningMode(enabled);
     setPlanNotice(null);
+    if (!enabled) setSelectedStopKey(null);
+  };
+
+  // Abrir Plan con trabajadoras elegidas activa la planificación (el interruptor sirve para salir)
+  const handleSheetChange = (next: ChromeSheet) => {
+    if (next === 'plan' && !planningMode && workers.length > 0) handlePlanningModeChange(true);
+    setSheet(next);
+  };
+
+  /** Tarjeta de la agenda → cerrar el panel, centrar el mapa en la visita y resaltarla */
+  const handleLocateStop = (index: number) => {
+    const stop = planStops[index];
+    if (!stop) return;
+    setSelectedStopKey(stopKey(stop));
+    setMapFocus({ lat: stop.lat, lon: stop.lon, nonce: Date.now() });
+    setSheet(null);
   };
 
   const handlePlanPointClick = useCallback((point: MapPoint) => {
@@ -677,6 +686,15 @@ const App: React.FC = () => {
       stop = { ...visit, workerId: ownCopy.id };
     }
     setPlanNotice(null);
+    // Ya está en la ruta: se resalta y la franja ofrece quitarla o ver su tarjeta
+    const existing = planStopsRef.current.find(
+      (s) => s.userId != null && String(s.userId) === String(point.userId)
+    );
+    if (existing) {
+      setSelectedStopKey(stopKey(existing));
+      return;
+    }
+    setSelectedStopKey(null);
     // Si estaba apartada para otro día, vuelve a la ruta
     setPostponed((prev) => {
       const kept = prev.filter((p) => p.userId == null || String(p.userId) !== String(point.userId));
@@ -708,6 +726,7 @@ const App: React.FC = () => {
       setPlanNotice('Elige primero a qué trabajadora planificar.');
       return;
     }
+    setSelectedStopKey(null);
     if (!planOriginRef.current || originEditableRef.current) {
       setPlanOrigin(mapPoint);
     } else if (endEditableRef.current) {
@@ -788,6 +807,11 @@ const App: React.FC = () => {
           .join(' · ')
       : planWorkerLabel;
 
+  const selectedIndex =
+    selectedStopKey != null ? planStops.findIndex((stop) => stopKey(stop) === selectedStopKey) : -1;
+  const selectedStop = selectedIndex >= 0 ? planStops[selectedIndex] : null;
+  const selectedTime = selectedIndex >= 0 ? schedule.stopTimes?.[selectedIndex] : undefined;
+
   const scheduleStopTimes = schedule.stopTimes;
   const planStopStarts = useMemo(
     () => scheduleStopTimes?.map((t) => t.start) ?? null,
@@ -798,6 +822,8 @@ const App: React.FC = () => {
     <div className="App">
       <AuthGuard>
         <AppChrome
+          sheet={sheet}
+          onSheetChange={handleSheetChange}
           planningActive={planningMode}
           statusBar={(openSheet) =>
             workers.length === 0 ? (
@@ -805,6 +831,26 @@ const App: React.FC = () => {
                 message="Elige trabajadoras para ver sus usuarias en el mapa."
                 actionLabel="Elegir"
                 onAction={() => openSheet('filters')}
+              />
+            ) : planningMode && selectedStop && !planNotice ? (
+              <MapStrip
+                title={
+                  `${selectedIndex + 1}. ${selectedStop.label}` +
+                  (selectedTime
+                    ? ` · ${formatMinutes(selectedTime.start)}–${formatMinutes(selectedTime.end)}`
+                    : '')
+                }
+                message="Ya está en la ruta."
+                actionLabel="Ver tarjeta"
+                onAction={() => {
+                  setCardScrollNonce((n) => n + 1);
+                  openSheet('plan');
+                }}
+                secondaryLabel="Quitar"
+                onSecondary={() => {
+                  handleRemoveStop(selectedIndex);
+                  setSelectedStopKey(null);
+                }}
               />
             ) : planningMode ? (
               <MapStrip
@@ -851,6 +897,10 @@ const App: React.FC = () => {
               hint={hint}
               onClearEnd={() => setPlanEnd(null)}
               onRemoveStop={handleRemoveStop}
+              onReorderStop={handleReorderStop}
+              onLocateStop={handleLocateStop}
+              selectedIndex={selectedIndex >= 0 ? selectedIndex : null}
+              scrollToSelected={cardScrollNonce}
               onClear={clearPlanWithUndo}
               // Cambiar la partida empieza la ruta de nuevo (se puede deshacer)
               onClearOrigin={clearPlanWithUndo}
@@ -886,6 +936,8 @@ const App: React.FC = () => {
             planWorkerId={planWorkerId}
             planLegs={planLegs}
             planStopTimes={planStopStarts}
+            planSelectedIndex={selectedIndex >= 0 ? selectedIndex : null}
+            focus={mapFocus}
             onPlanPointClick={handlePlanPointClick}
             onPlanMapClick={handlePlanMapClick}
           />
@@ -925,4 +977,8 @@ const App: React.FC = () => {
 
 const container = document.getElementById('root');
 const root = createRoot(container!);
-root.render(<App />);
+root.render(
+  <ErrorBoundary>
+    <App />
+  </ErrorBoundary>
+);

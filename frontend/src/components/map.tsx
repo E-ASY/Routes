@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import maplibregl from 'maplibre-gl';
-import { Deck } from '@deck.gl/core';
+import { Deck, FlyToInterpolator } from '@deck.gl/core';
 import { IconLayer, PathLayer, ScatterplotLayer, TextLayer } from '@deck.gl/layers';
 
 const ORIGIN_ICON_URL = `${import.meta.env.BASE_URL}icons/origin-person.svg`;
@@ -27,6 +27,10 @@ interface MapProps {
   planLegs?: LegsResult | null;
   /** Hora de inicio de cada visita (minutos desde medianoche), si hay horario */
   planStopTimes?: number[] | null;
+  /** Visita resaltada (tocada en el mapa o en su tarjeta) */
+  planSelectedIndex?: number | null;
+  /** Centrar el mapa aquí; `nonce` distinto repite el vuelo al mismo sitio */
+  focus?: { lat: number; lon: number; nonce: number } | null;
   onPlanPointClick?: (point: MapPoint) => void;
   onPlanMapClick?: (lat: number, lon: number) => void;
 }
@@ -107,6 +111,8 @@ const Map: React.FC<MapProps> = ({
   planWorkerId = null,
   planLegs = null,
   planStopTimes = null,
+  planSelectedIndex = null,
+  focus = null,
   onPlanPointClick,
   onPlanMapClick,
 }) => {
@@ -117,6 +123,8 @@ const Map: React.FC<MapProps> = ({
   const onPlanMapClickRef = useRef(onPlanMapClick);
   const pointsRef = useRef(points);
   const hasOriginRef = useRef(Boolean(planOrigin));
+  // Última vista del mapa, para volar a una visita sin perder giro ni inclinación
+  const viewStateRef = useRef<Record<string, unknown> | null>(null);
 
   useEffect(() => {
     planningModeRef.current = planningMode;
@@ -289,6 +297,7 @@ const Map: React.FC<MapProps> = ({
             }
           },
           onViewStateChange: ({ viewState }) => {
+            viewStateRef.current = viewState as Record<string, unknown>;
             if (mapRef.current) {
               mapRef.current.jumpTo({
                 center: [viewState.longitude, viewState.latitude],
@@ -409,6 +418,26 @@ const Map: React.FC<MapProps> = ({
             getWidth: 5,
             widthUnits: 'meters',
             widthMinPixels: 3,
+            pickable: false,
+          })
+        );
+      }
+
+      const selectedStop = planSelectedIndex != null ? planStops[planSelectedIndex] : undefined;
+      if (selectedStop) {
+        // Halo ámbar bajo el número de la visita resaltada
+        layers.push(
+          new ScatterplotLayer({
+            id: 'plan-selected',
+            data: [selectedStop],
+            getPosition: (d: VisitPlanPoint) => [d.lon, d.lat],
+            getFillColor: [245, 158, 11, 90],
+            getLineColor: [245, 158, 11, 255],
+            radiusUnits: 'pixels',
+            getRadius: 30,
+            lineWidthMinPixels: 3,
+            stroked: true,
+            filled: true,
             pickable: false,
           })
         );
@@ -540,7 +569,38 @@ const Map: React.FC<MapProps> = ({
       layers,
       canvas: mapRef.current.getCanvas()
     });
-  }, [points, routes, workers, planningMode, planOrigin, planStops, planEnd, planLegs, planWorkerId, planStopTimes]);
+  }, [
+    points,
+    routes,
+    workers,
+    planningMode,
+    planOrigin,
+    planStops,
+    planEnd,
+    planLegs,
+    planWorkerId,
+    planStopTimes,
+    planSelectedIndex,
+  ]);
+
+  // Volar a la visita elegida desde su tarjeta
+  useEffect(() => {
+    if (!focus || !deckRef.current) return;
+    const current = viewStateRef.current ?? {};
+    const zoom = typeof current.zoom === 'number' ? Math.max(current.zoom, 13) : 13;
+    deckRef.current.setProps({
+      initialViewState: {
+        bearing: 0,
+        pitch: 30,
+        ...current,
+        latitude: focus.lat,
+        longitude: focus.lon,
+        zoom,
+        transitionDuration: 700,
+        transitionInterpolator: new FlyToInterpolator(),
+      },
+    });
+  }, [focus]);
 
   return (
     <div id="map" style={{ width: '100%', height: '100%', position: 'relative' }}>

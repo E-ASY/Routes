@@ -24,7 +24,7 @@ Primary UX: select workers → show assigned users on a map → routes/km → op
 - Functional components. API/auth helpers live under `frontend/src/services/`.
 - Chrome: `app_chrome.tsx` — bottom bar (mobile) / right drawer (desktop). Keep filter selection **controlled from App state** so closing the sheet does not clear the map.
 - Theme tokens: `frontend/src/theme.ts` + CSS variables in `index.css` (ink/sage surfaces, not flat white).
-- Verify from `frontend/`: `npm run lint`, `npm run build`.
+- Verify from `frontend/`: `npm run lint`, `npm run build`, `npm test` (vitest; pure helpers in `src/services/*.test.ts`).
 
 ## Backend
 

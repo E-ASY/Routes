@@ -11,13 +11,34 @@ interface MapStripProps {
   warning?: boolean;
   actionLabel: string;
   onAction: () => void;
+  /** Segunda acción opcional, p. ej. "Quitar" */
+  secondaryLabel?: string;
+  onSecondary?: () => void;
 }
+
+const actionSx = {
+  flexShrink: 0,
+  minHeight: 40,
+  px: 1.5,
+  fontWeight: 700,
+  color: 'inherit',
+  bgcolor: 'rgba(128, 128, 128, 0.2)',
+  '&:hover': { bgcolor: 'rgba(128, 128, 128, 0.3)' },
+} as const;
 
 /**
  * Franja sobre la barra inferior con el siguiente paso, visible mientras el panel está
  * cerrado: así se puede tocar el mapa sin perder la guía ni los avisos.
  */
-const MapStrip: React.FC<MapStripProps> = ({ title, message, warning = false, actionLabel, onAction }) => (
+const MapStrip: React.FC<MapStripProps> = ({
+  title,
+  message,
+  warning = false,
+  actionLabel,
+  onAction,
+  secondaryLabel,
+  onSecondary,
+}) => (
   <Box
     role="status"
     aria-live="polite"
@@ -53,19 +74,12 @@ const MapStrip: React.FC<MapStripProps> = ({ title, message, warning = false, ac
         {message}
       </Typography>
     </Box>
-    <Button
-      size="small"
-      onClick={onAction}
-      sx={{
-        flexShrink: 0,
-        minHeight: 40,
-        px: 1.5,
-        fontWeight: 700,
-        color: 'inherit',
-        bgcolor: 'rgba(128, 128, 128, 0.2)',
-        '&:hover': { bgcolor: 'rgba(128, 128, 128, 0.3)' },
-      }}
-    >
+    {secondaryLabel && onSecondary && (
+      <Button size="small" onClick={onSecondary} sx={{ ...actionSx, bgcolor: 'transparent' }}>
+        {secondaryLabel}
+      </Button>
+    )}
+    <Button size="small" onClick={onAction} sx={actionSx}>
       {actionLabel}
     </Button>
   </Box>

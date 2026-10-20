@@ -4,6 +4,8 @@ import { alpha } from '@mui/material/styles';
 import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
 import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import DragIndicatorIcon from '@mui/icons-material/DragIndicator';
+import PlaceOutlinedIcon from '@mui/icons-material/PlaceOutlined';
 import DirectionsCarOutlinedIcon from '@mui/icons-material/DirectionsCarOutlined';
 import ScheduleIcon from '@mui/icons-material/Schedule';
 import { ScheduleConflict, ScheduledVisit, TimeRange, VisitPlanPoint } from '../services/map_service';
@@ -114,6 +116,21 @@ interface VisitCardProps {
   onFixedChange: (minutes: number | null) => void;
   onMove: (delta: number) => void;
   onRemove: () => void;
+  /** Centrar el mapa en esta visita */
+  onLocate: () => void;
+  /** Resaltada (tocada en el mapa o en su tarjeta) */
+  selected: boolean;
+  /** Se está arrastrando esta tarjeta */
+  dragging: boolean;
+  /** Al soltar, la arrastrada quedará antes o después de esta tarjeta */
+  dropSide: 'before' | 'after' | null;
+  /** Empezar a arrastrar desde el asa */
+  onDragStart: (event: React.PointerEvent<HTMLElement>) => void;
+}
+
+/** La hoja inferior del móvil se cierra deslizando: el asa de arrastre no debe cerrarla */
+function keepSheetOpen(event: React.TouchEvent<HTMLElement>) {
+  (event.nativeEvent as TouchEvent & { defaultMuiPrevented?: boolean }).defaultMuiPrevented = true;
 }
 
 /** Texto del problema de una visita (pasarse de la jornada no es llegar tarde: va aparte) */
@@ -141,16 +158,32 @@ export const VisitCard: React.FC<VisitCardProps> = ({
   onFixedChange,
   onMove,
   onRemove,
+  onLocate,
+  selected,
+  dragging,
+  dropSide,
+  onDragStart,
 }) => {
   const rangesValid = ranges.every(isValidRange);
   return (
     <Box
+      data-stop-index={index}
       sx={(theme) => ({
         p: 1,
         borderRadius: 2,
         border: '1px solid',
-        borderColor: conflict ? alpha(theme.palette.warning.main, 0.6) : 'divider',
+        borderColor: selected
+          ? theme.palette.warning.main
+          : conflict
+            ? alpha(theme.palette.warning.main, 0.6)
+            : 'divider',
         bgcolor: conflict ? alpha(theme.palette.warning.main, 0.06) : 'rgba(255, 255, 255, 0.5)',
+        boxShadow: selected ? `0 0 0 2px ${alpha(theme.palette.warning.main, 0.35)}` : 'none',
+        opacity: dragging ? 0.45 : 1,
+        // Línea donde caerá la visita arrastrada
+        borderTop: dropSide === 'before' ? `3px solid ${STOP_BLUE}` : undefined,
+        borderBottom: dropSide === 'after' ? `3px solid ${STOP_BLUE}` : undefined,
+        transition: 'opacity 120ms ease',
       })}
     >
     <Box sx={{ display: 'flex', gap: 1.25 }}>
@@ -196,6 +229,14 @@ export const VisitCard: React.FC<VisitCardProps> = ({
             )}
             {stop.label}
           </Typography>
+          <IconButton
+            aria-label={`ver la visita ${index + 1} en el mapa`}
+            onClick={onLocate}
+            size="small"
+            sx={{ ...TOUCH_TARGET, mt: -1 }}
+          >
+            <PlaceOutlinedIcon fontSize="small" />
+          </IconButton>
           <IconButton
             aria-label={`quitar visita ${index + 1}`}
             onClick={onRemove}
@@ -250,10 +291,30 @@ export const VisitCard: React.FC<VisitCardProps> = ({
             disabled={index === count - 1}
             onClick={() => onMove(1)}
             size="small"
-            sx={{ ...TOUCH_TARGET, mr: -1 }}
+            sx={TOUCH_TARGET}
           >
             <ArrowDownwardIcon sx={{ fontSize: 18 }} />
           </IconButton>
+          {count > 1 && (
+            <Box
+              role="button"
+              aria-label={`arrastrar visita ${index + 1} para cambiar el orden`}
+              onPointerDown={onDragStart}
+              onTouchStart={keepSheetOpen}
+              sx={{
+                ...TOUCH_TARGET,
+                mr: -1,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: 'grab',
+                touchAction: 'none',
+                userSelect: 'none',
+              }}
+            >
+              <DragIndicatorIcon sx={{ fontSize: 20 }} />
+            </Box>
+          )}
         </Box>
       </Box>
     </Box>
