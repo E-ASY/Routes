@@ -250,6 +250,8 @@ export interface ScheduleRequest {
   windows: TimeRange[][];
   /** Hora fija de inicio por visita (null = sin fijar); manda sobre sus franjas */
   fixedStarts: (number | null)[];
+  /** Duración de cada visita en minutos (mismo orden que windows) */
+  serviceMinutes: number[];
 }
 
 /** Qué prioriza una opción de horario */
@@ -297,7 +299,8 @@ export interface ScheduleResult {
   unscheduled: UnscheduledVisit[];
   exact: boolean;
   ms: number;
-  service_minutes: number;
+  /** Duración de cada visita (minutos) */
+  service_minutes: number[];
   /** google = tiempos reales; estimate / mixed = alguno estimado en línea recta */
   travel_source: 'google' | 'estimate' | 'mixed';
 }
@@ -396,6 +399,7 @@ export interface ManualScheduleResult {
   /** Minutos que se pasa de la jornada (0 si acaba a tiempo) */
   after_shift_min: number;
   feasible: boolean;
-  service_minutes: number;
+  /** Duración de cada visita (minutos) */
+  service_minutes: number[];
   travel_source: 'google' | 'estimate' | 'mixed';
 }

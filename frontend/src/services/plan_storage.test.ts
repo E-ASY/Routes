@@ -4,8 +4,10 @@ import {
   clearSavedPlanData,
   loadAvailability,
   loadDayDraft,
+  loadDurations,
   saveAvailability,
   saveDayDraft,
+  saveDurations,
 } from './plan_storage';
 
 /** localStorage en memoria; `blocked` simula el modo privado */
@@ -73,9 +75,16 @@ describe('plan guardado en el navegador', () => {
     expect(loadAvailability()).toEqual({ u3: [{ start: 540, end: 600 }] });
   });
 
+  it('la duración de cada usuaria se mantiene de un día para otro', () => {
+    saveDurations({ u3: 90 });
+    vi.setSystemTime(new Date(2026, 9, 25, 8, 0));
+    expect(loadDurations()).toEqual({ u3: 90 });
+  });
+
   it('al cerrar sesión se borra todo', () => {
     saveDayDraft(draft);
     saveAvailability({ u3: [] });
+    saveDurations({ u3: 90 });
     clearSavedPlanData();
     expect(storage.data.size).toBe(0);
   });

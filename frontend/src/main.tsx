@@ -31,8 +31,10 @@ import { formatPersonName } from './services/person_name';
 import {
   SavedPlan,
   loadAvailability,
+  loadDurations,
   loadDayDraft,
   saveAvailability,
+  saveDurations,
   saveDayDraft,
 } from './services/plan_storage';
 import { Box, Button, Snackbar, Typography } from '@mui/material';
@@ -51,7 +53,7 @@ function formatMapPointLabel(point: MapPoint): string {
 
 /** Jornada por defecto: 08:00–15:00 (minutos desde medianoche) */
 const DEFAULT_SHIFT: TimeRange = { start: 8 * 60, end: 15 * 60 };
-/** Duración de cada visita; fija por ahora */
+/** Duración de la visita si no se ha puesto otra para esa usuaria */
 const VISIT_MINUTES = 60;
 
 /** Última vez que se pulsó "Organizar horario" y la opción elegida */
@@ -157,6 +159,12 @@ const App: React.FC = () => {
     (stops: VisitPlanPoint[]) => stops.map((stop) => availability[stopKey(stop)] ?? []),
     [availability]
   );
+  // Duración de la visita de cada usuaria (se mantiene de un día para otro, como sus franjas)
+  const [durations, setDurations] = useState<Record<string, number>>(loadDurations);
+  const durationsFor = useCallback(
+    (stops: VisitPlanPoint[]) => stops.map((stop) => durations[stopKey(stop)] ?? VISIT_MINUTES),
+    [durations]
+  );
   // Hora fija elegida a mano para una usuaria (manda sobre sus franjas)
   const [fixedStarts, setFixedStarts] = useState<Record<string, number>>(initialDraft?.fixedStarts ?? {});
   const fixedFor = useCallback(
@@ -258,6 +266,7 @@ const App: React.FC = () => {
     const stops = planStops;
     const windows = rangesFor(stops);
     const fixed = fixedFor(stops);
+    const minutes = durationsFor(stops);
     // Si se aplicó una opción, "Tu orden" sigue siendo el que puso la trabajadora
     const ownOrder = sameVisits(ownStops, stops) ? ownStops : stops;
     setScheduleLoading(true);
@@ -268,12 +277,13 @@ const App: React.FC = () => {
       const request = { finish: planFinish, shift: planShift };
       // A la vez, el horario de "Tu orden" para poder compararlo y volver a él
       const [result, own] = await Promise.all([
-        mapsService.scheduleVisits(toPoints(stops), { ...request, windows, fixedStarts: fixed }),
+        mapsService.scheduleVisits(toPoints(stops), { ...request, windows, fixedStarts: fixed, serviceMinutes: minutes }),
         mapsService
           .evaluateSchedule(toPoints(ownOrder), {
             ...request,
             windows: rangesFor(ownOrder),
             fixedStarts: fixedFor(ownOrder),
+            serviceMinutes: durationsFor(ownOrder),
             goal: scheduleGoal,
           })
           .catch(() => null),
@@ -284,7 +294,7 @@ const App: React.FC = () => {
         finish: planFinish,
         end: activeEnd,
         shift: planShift,
-        windowsKey: JSON.stringify([windows, fixed]),
+        windowsKey: JSON.stringify([windows, fixed, minutes]),
         selected: null,
         appliedStops: null,
         ownStops: ownOrder,
@@ -296,9 +306,21 @@ const App: React.FC = () => {
     } finally {
       setScheduleLoading(false);
     }
-  }, [planOrigin, planStops, ownStops, planFinish, activeEnd, planShift, rangesFor, fixedFor, scheduleGoal]);
+  }, [
+    planOrigin,
+    planStops,
+    ownStops,
+    planFinish,
+    activeEnd,
+    planShift,
+    rangesFor,
+    fixedFor,
+    durationsFor,
+    scheduleGoal,
+  ]);
 
-  // El resultado solo vale con las mismas visitas (antes o después de aplicarlo), final, jornada y franjas
+  // El resultado solo vale con las mismas visitas (antes o después de aplicarlo), final, jornada,
+  // franjas, horas fijas y duraciones
   const scheduleFresh =
     scheduleRun != null &&
     (planStops === scheduleRun.stops ||
@@ -307,7 +329,8 @@ const App: React.FC = () => {
     scheduleRun.finish === planFinish &&
     scheduleRun.end === activeEnd &&
     scheduleRun.shift === planShift &&
-    scheduleRun.windowsKey === JSON.stringify([rangesFor(scheduleRun.stops), fixedFor(scheduleRun.stops)]);
+    scheduleRun.windowsKey ===
+      JSON.stringify([rangesFor(scheduleRun.stops), fixedFor(scheduleRun.stops), durationsFor(scheduleRun.stops)]);
   const freshRun = scheduleFresh ? scheduleRun : null;
   const appliedOption =
     freshRun && freshRun.selected != null && planStops === freshRun.appliedStops
@@ -351,6 +374,7 @@ const App: React.FC = () => {
   // Solo si ya se organizó el horario o hay alguna hora fija, para no gastar llamadas a Google.
   const manualWindows = rangesFor(planStops);
   const manualFixed = fixedFor(planStops);
+  const manualDurations = durationsFor(planStops);
   const manualInputsValid =
     isValidRange(planShift) && manualWindows.every((ranges) => ranges.every(isValidRange));
   const manualEnabled =
@@ -367,6 +391,7 @@ const App: React.FC = () => {
         planShift,
         manualWindows,
         manualFixed,
+        manualDurations,
         scheduleGoal,
       ])
     : null;
@@ -389,6 +414,7 @@ const App: React.FC = () => {
           shift: planShift,
           windows: manualWindows,
           fixedStarts: manualFixed,
+          serviceMinutes: manualDurations,
           goal: scheduleGoal,
         });
         if (!cancelled) setManualSchedule({ key: manualKey, result });
@@ -488,6 +514,7 @@ const App: React.FC = () => {
     ownStops,
   ]);
   useEffect(() => saveAvailability(availability), [availability]);
+  useEffect(() => saveDurations(durations), [durations]);
 
   // "Limpiar" y quitar una visita se pueden deshacer durante unos segundos
   const [undo, setUndo] = useState<{ message: string; restore: () => void } | null>(null);
@@ -742,7 +769,19 @@ const App: React.FC = () => {
       const stop = planStops[index];
       if (stop) setAvailability((prev) => ({ ...prev, [stopKey(stop)]: ranges }));
     },
-    serviceMinutes: VISIT_MINUTES,
+    defaultMinutes: VISIT_MINUTES,
+    stopDurations: manualDurations,
+    onStopDurationChange: (index, minutes) => {
+      const stop = planStops[index];
+      if (!stop) return;
+      setDurations((prev) => {
+        const next = { ...prev };
+        // Solo se guardan las que no usan la duración por defecto
+        if (minutes === VISIT_MINUTES) delete next[stopKey(stop)];
+        else next[stopKey(stop)] = minutes;
+        return next;
+      });
+    },
     loading: scheduleLoading,
     error: scheduleError,
     onSchedule: handleSchedule,

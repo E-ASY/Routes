@@ -155,6 +155,8 @@ const MAX_WINDOWS_PER_VISIT = 4;
 const MINUTES_PER_DAY = 24 * 60;
 
 const minuteSchema = z.number().int().min(0).max(MINUTES_PER_DAY);
+/** Duración de una visita: de 5 min a 8 h */
+const serviceMinuteSchema = z.number().int().min(5).max(480);
 
 const timeRangeSchema = z
   .object({ start: minuteSchema, end: minuteSchema })
@@ -171,7 +173,8 @@ const scheduleBodySchema = z
     shift: timeRangeSchema,
     // Una lista por visita (mismo orden que points sin partida ni llegada); vacía = cualquier hora
     windows: z.array(z.array(timeRangeSchema).max(MAX_WINDOWS_PER_VISIT)),
-    serviceMinutes: z.number().int().min(10).max(240).optional(),
+    // Una duración para todas o una por visita (mismo orden que windows)
+    serviceMinutes: z.union([serviceMinuteSchema, z.array(serviceMinuteSchema)]).optional(),
     // optimize = buscar el mejor orden; manual = horario del orden dado (points tal cual)
     mode: z.enum(['optimize', 'manual']).optional(),
     goal: z.enum(['distance', 'finish', 'idle']).optional(),
@@ -186,6 +189,9 @@ const scheduleBodySchema = z
   })
   .refine((b) => !b.fixedStarts || b.fixedStarts.length === b.windows.length, {
     message: 'body.fixedStarts debe tener un valor por visita',
+  })
+  .refine((b) => !Array.isArray(b.serviceMinutes) || b.serviceMinutes.length === b.windows.length, {
+    message: 'body.serviceMinutes debe tener una duración por visita',
   });
 
 /**

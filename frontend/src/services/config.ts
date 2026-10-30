@@ -28,11 +28,20 @@ export async function apiRequest<T>(
       throw new Error('Authentication is required for this route');
     }
     
-    const error = await response.json().catch(() => ({
-      message: 'Error desconocido en la API'
-    }));
+    // Respuesta que no es JSON (p. ej. un 404 de Express porque el backend aún no tiene la ruta)
+    const text = await response.text();
+    let error: { error?: string; message?: string } = {};
+    try {
+      error = JSON.parse(text) as { error?: string; message?: string };
+    } catch {
+      if (response.status === 404) {
+        throw new Error('El servidor no tiene esta función. Reinicia el backend y vuelve a intentarlo.');
+      }
+    }
     throw new Error(
-      error.error || error.message || `Error ${response.status}: ${response.statusText}`
+      error.error ||
+        error.message ||
+        `Error ${response.status}: ${response.statusText || 'respuesta no válida del servidor'}`
     );
   }
   

@@ -10,7 +10,7 @@ import DirectionsCarOutlinedIcon from '@mui/icons-material/DirectionsCarOutlined
 import ScheduleIcon from '@mui/icons-material/Schedule';
 import { ScheduleConflict, ScheduledVisit, TimeRange, VisitPlanPoint } from '../services/map_service';
 import { formatMinutes, formatRanges, isValidRange } from '../services/time_ranges';
-import { AvailabilityEditor, FixedTimeEditor } from './visit_schedule';
+import { AvailabilityEditor, DurationPicker, FixedTimeEditor } from './visit_schedule';
 
 /** Mismo azul que el número de la visita en el mapa */
 const STOP_BLUE = '#1e40af';
@@ -108,7 +108,10 @@ interface VisitCardProps {
   ranges: TimeRange[];
   fixed: number | null;
   conflict: ScheduleConflict | null;
+  /** Duración de esta visita y la que se usa si no se cambia */
   serviceMinutes: number;
+  defaultMinutes: number;
+  onDurationChange: (minutes: number) => void;
   shiftStart: number;
   editing: boolean;
   onToggleEdit: () => void;
@@ -151,6 +154,8 @@ export const VisitCard: React.FC<VisitCardProps> = ({
   fixed,
   conflict,
   serviceMinutes,
+  defaultMinutes,
+  onDurationChange,
   shiftStart,
   editing,
   onToggleEdit,
@@ -246,6 +251,7 @@ export const VisitCard: React.FC<VisitCardProps> = ({
             <DeleteOutlineIcon fontSize="small" />
           </IconButton>
         </Box>
+        <DurationPicker value={serviceMinutes} defaultMinutes={defaultMinutes} onChange={onDurationChange} />
         {time && time.wait > 0 && (
           <Typography variant="caption" display="block" sx={{ color: 'text.secondary' }}>
             Espera {time.wait} min antes de entrar

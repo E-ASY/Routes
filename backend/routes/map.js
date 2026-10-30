@@ -10,7 +10,7 @@ const routeService = require('../services/routes');
 const viewportService = require('../services/viewport');
 const { sendServerError } = require('../utils/errors');
 const { optimizePlanOrder } = require('../services/routeOptimizer');
-const { planDay, evaluateOrder, DEFAULT_SERVICE_MINUTES } = require('../services/visitScheduler');
+const { planDay, evaluateOrder, visitDurations } = require('../services/visitScheduler');
 const {
   parseWorkers,
   parseMunicipalities,
@@ -242,7 +242,7 @@ router.post('/optimize-order', routesLimiter, (req, res) => {
  *            finish: 'start'|'last'|'custom',
  *            shift: { start, end },          // minutos desde medianoche
  *            windows: [[{ start, end }], ...], // una lista por visita; vacía = cualquier hora
- *            serviceMinutes?: number,        // por defecto 60
+ *            serviceMinutes?: number|number[], // por defecto 60; o una duración por visita
  *            fixedStarts?: [number|null],    // hora fija por visita (manda sobre sus franjas)
  *            mode?: 'optimize'|'manual',     // manual = horario del orden dado, con conflictos
  *            goal?: 'distance'|'finish'|'idle' }  // criterio del horario en modo manual
@@ -254,10 +254,10 @@ router.post('/schedule-visits', routesLimiter, async (req, res) => {
       return res.status(parsed.status).json({ error: parsed.error });
     }
     const { points, finish, shift, serviceMinutes, mode, goal, fixedStarts } = parsed;
-    const service = serviceMinutes ?? DEFAULT_SERVICE_MINUTES;
+    const services = visitDurations(serviceMinutes, parsed.windows.length);
     // Una hora fija equivale a una franja exacta de la duración de la visita
     const windows = parsed.windows.map((ranges, i) =>
-      fixedStarts[i] != null ? [{ start: fixedStarts[i], end: fixedStarts[i] + service }] : ranges
+      fixedStarts[i] != null ? [{ start: fixedStarts[i], end: fixedStarts[i] + services[i] }] : ranges
     );
     const matrix = await routeService.computeTravelMatrix(points);
     const endNode = finish === 'custom' ? points.length - 1 : null;
@@ -271,7 +271,7 @@ router.post('/schedule-visits', routesLimiter, async (req, res) => {
       shift,
       finish,
       endNode,
-      serviceMinutes: service,
+      serviceMinutes: services,
     };
     if (mode === 'manual') {
       const manual = evaluateOrder({ ...input, goal });
@@ -279,7 +279,7 @@ router.post('/schedule-visits', routesLimiter, async (req, res) => {
         `POST /schedule-visits mode=manual visits=${visits.length} feasible=${manual.feasible} ` +
         `conflicts=${manual.conflicts.length} travel=${matrix.source}`
       );
-      return res.json({ mode, ...manual, service_minutes: service, travel_source: matrix.source });
+      return res.json({ mode, ...manual, service_minutes: services, travel_source: matrix.source });
     }
     const result = planDay(input);
     logger.debug(
@@ -290,7 +290,7 @@ router.post('/schedule-visits', routesLimiter, async (req, res) => {
     res.json({
       mode,
       ...result,
-      service_minutes: service,
+      service_minutes: services,
       travel_source: matrix.source,
     });
   } catch (error) {

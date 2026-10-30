@@ -13,7 +13,6 @@ describe('resumen del día', () => {
       ],
       departure: H(8, 50),
       finishTime: H(11, 50),
-      serviceMinutes: 60,
       km: 23.4,
     });
     expect(summary).toEqual({ visits: 2, attendMin: 120, travelMin: 45, waitMin: 15, km: 23.4 });

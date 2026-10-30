@@ -8,12 +8,15 @@ import {
   ListItem,
   ListItemButton,
   ListItemText,
+  Menu,
+  MenuItem,
   TextField,
   Typography,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import CloseIcon from '@mui/icons-material/Close';
 import UndoIcon from '@mui/icons-material/Undo';
+import TimerOutlinedIcon from '@mui/icons-material/TimerOutlined';
 import {
   ScheduleGoal,
   ScheduleOption,
@@ -22,6 +25,7 @@ import {
   VisitPlanPoint,
 } from '../services/map_service';
 import { formatMinutes, isValidRange, parseTime } from '../services/time_ranges';
+import { formatDuration } from '../services/plan_summary';
 
 const timeFieldProps = {
   type: 'time',
@@ -128,6 +132,60 @@ export const AvailabilityEditor: React.FC<{
         </Button>
       )}
     </Box>
+  );
+};
+
+/** Duraciones habituales para elegir (minutos) */
+const DURATION_CHOICES = [15, 30, 45, 60, 75, 90, 120, 150, 180, 240, 300, 360, 480];
+
+/** Cuánto dura la visita de esta usuaria: botón siempre visible en la tarjeta; se recuerda */
+export const DurationPicker: React.FC<{
+  value: number;
+  defaultMinutes: number;
+  onChange: (minutes: number) => void;
+}> = ({ value, defaultMinutes, onChange }) => {
+  const [anchor, setAnchor] = React.useState<HTMLElement | null>(null);
+  const choices = DURATION_CHOICES.includes(value) ? DURATION_CHOICES : [...DURATION_CHOICES, value].sort((a, b) => a - b);
+  return (
+    <>
+      <Button
+        size="small"
+        startIcon={<TimerOutlinedIcon sx={{ fontSize: '16px !important' }} />}
+        onClick={(event) => setAnchor(event.currentTarget)}
+        aria-haspopup="menu"
+        aria-label={`duración de la visita: ${formatDuration(value)}`}
+        color={value === defaultMinutes ? 'inherit' : 'secondary'}
+        sx={{
+          minHeight: 32,
+          px: 0.75,
+          ml: -0.75,
+          fontSize: '0.75rem',
+          fontWeight: value === defaultMinutes ? 500 : 700,
+          color: value === defaultMinutes ? 'text.secondary' : undefined,
+        }}
+      >
+        Duración: {formatDuration(value)}
+      </Button>
+      <Menu anchorEl={anchor} open={anchor != null} onClose={() => setAnchor(null)} sx={{ zIndex: 1400 }}>
+        <MenuItem disabled sx={{ fontSize: '0.75rem', opacity: '1 !important', color: 'text.secondary' }}>
+          Duración de la visita
+        </MenuItem>
+        {choices.map((minutes) => (
+          <MenuItem
+            key={minutes}
+            selected={minutes === value}
+            onClick={() => {
+              onChange(minutes);
+              setAnchor(null);
+            }}
+            sx={{ minHeight: 40 }}
+          >
+            {formatDuration(minutes)}
+            {minutes === defaultMinutes ? ' (por defecto)' : ''}
+          </MenuItem>
+        ))}
+      </Menu>
+    </>
   );
 };
 

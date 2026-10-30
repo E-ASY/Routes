@@ -49,7 +49,11 @@ export interface PlanSchedule {
   /** Franjas de cada visita, en el mismo orden que stops (vacío = cualquier hora) */
   stopRanges: TimeRange[][];
   onStopRangesChange: (index: number, ranges: TimeRange[]) => void;
-  serviceMinutes: number;
+  /** Duración de la visita si no se ha cambiado para esa usuaria */
+  defaultMinutes: number;
+  /** Duración de cada visita (mismo orden que stops) */
+  stopDurations: number[];
+  onStopDurationChange: (index: number, minutes: number) => void;
   loading: boolean;
   error: string | null;
   onSchedule: () => void;
@@ -330,7 +334,6 @@ const VisitPlanPanel: React.FC<VisitPlanPanelProps> = ({
             times,
             departure: schedule.departure,
             finishTime: schedule.finishTime,
-            serviceMinutes: schedule.serviceMinutes,
             km: legs && !legsLoading ? legs.total_distance_km : null,
           })
         )
@@ -521,7 +524,9 @@ const VisitPlanPanel: React.FC<VisitPlanPanelProps> = ({
                     ranges={schedule.stopRanges[index] ?? []}
                     fixed={schedule.fixedStarts[index] ?? null}
                     conflict={schedule.conflicts.find((c) => c.visit === index) ?? null}
-                    serviceMinutes={schedule.serviceMinutes}
+                    serviceMinutes={schedule.stopDurations[index] ?? schedule.defaultMinutes}
+                    defaultMinutes={schedule.defaultMinutes}
+                    onDurationChange={(minutes) => schedule.onStopDurationChange(index, minutes)}
                     shiftStart={schedule.shift.start}
                     editing={editingStop === index}
                     onToggleEdit={() => setEditingStop(editingStop === index ? null : index)}

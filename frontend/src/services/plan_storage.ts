@@ -3,7 +3,7 @@ import { PlanFinish, TimeRange, VisitPlanPoint } from './map_service';
 /**
  * Guarda el plan en el navegador para no perderlo si el móvil cierra la pestaña.
  * - Plan del día (trabajadoras, rutas, horas fijas): solo vale para hoy.
- * - Franjas de cada usuaria: se mantienen de un día para otro.
+ * - Franjas y duración de la visita de cada usuaria: se mantienen de un día para otro.
  * Se borra todo al cerrar sesión. Si el navegador no deja guardar, la app sigue igual.
  */
 
@@ -34,6 +34,7 @@ export interface DayDraft {
 
 const DAY_KEY = 'routes.plan-day.v1';
 const AVAILABILITY_KEY = 'routes.availability.v1';
+const DURATIONS_KEY = 'routes.visit-durations.v1';
 
 function today(): string {
   const now = new Date();
@@ -77,11 +78,21 @@ export function saveAvailability(availability: Record<string, TimeRange[]>): voi
   write(AVAILABILITY_KEY, availability);
 }
 
+/** Duración de la visita por usuaria (minutos), solo las que no usan la duración por defecto */
+export function loadDurations(): Record<string, number> {
+  return read<Record<string, number>>(DURATIONS_KEY) ?? {};
+}
+
+export function saveDurations(durations: Record<string, number>): void {
+  write(DURATIONS_KEY, durations);
+}
+
 /** Al cerrar sesión: no dejar datos de usuarias en el dispositivo */
 export function clearSavedPlanData(): void {
   try {
     window.localStorage.removeItem(DAY_KEY);
     window.localStorage.removeItem(AVAILABILITY_KEY);
+    window.localStorage.removeItem(DURATIONS_KEY);
   } catch {
     // Nada que borrar si el navegador no deja acceder
   }

@@ -79,17 +79,22 @@ function pointTooltipHtml(point: MapPoint): string {
   `;
 }
 
-/** Distancia aproximada en grados; umbral ~0.008 ≈ 800–900 m en Canarias */
+/**
+ * Distancia aproximada en grados; umbral ~0.008 ≈ 800–900 m en Canarias.
+ * Con `workerId`, solo cuentan las usuarias de esa trabajadora (la del plan).
+ */
 function findNearestUserPoint(
   points: MapPoint[],
   lat: number,
   lon: number,
-  maxDist: number
+  maxDist: number,
+  workerId: string | null = null
 ): MapPoint | null {
   let best: MapPoint | null = null;
   let bestD = maxDist;
   for (const p of points) {
     if (p.kind === 'worker') continue;
+    if (workerId != null && String(p.id) !== workerId) continue;
     const d = Math.hypot(Number(p.lat) - lat, Number(p.lon) - lon);
     if (d < bestD) {
       bestD = d;
@@ -123,6 +128,7 @@ const Map: React.FC<MapProps> = ({
   const onPlanMapClickRef = useRef(onPlanMapClick);
   const pointsRef = useRef(points);
   const hasOriginRef = useRef(Boolean(planOrigin));
+  const planWorkerIdRef = useRef(planWorkerId);
   // Última vista del mapa, para volar a una visita sin perder giro ni inclinación
   const viewStateRef = useRef<Record<string, unknown> | null>(null);
 
@@ -141,6 +147,9 @@ const Map: React.FC<MapProps> = ({
   useEffect(() => {
     hasOriginRef.current = Boolean(planOrigin);
   }, [planOrigin]);
+  useEffect(() => {
+    planWorkerIdRef.current = planWorkerId;
+  }, [planWorkerId]);
 
   const WORKER_COLORS = [
     [102, 197, 204],
@@ -271,7 +280,17 @@ const Map: React.FC<MapProps> = ({
             if (!planningModeRef.current) return;
 
             if (info.object && (info.layer?.id === 'user-points' || info.layer?.id === 'worker-homes')) {
-              onPlanPointClickRef.current?.(info.object as MapPoint);
+              let point = info.object as MapPoint;
+              // Puntos superpuestos de varias trabajadoras: elegir el de la trabajadora del plan
+              const planWorker = planWorkerIdRef.current != null ? String(planWorkerIdRef.current) : null;
+              if (point.kind !== 'worker' && planWorker != null && String(point.id) !== planWorker) {
+                const own = deckRef.current
+                  ?.pickMultipleObjects({ x: info.x, y: info.y, radius: 12, layerIds: ['user-points'], depth: 20 })
+                  .map((picked) => picked.object as MapPoint)
+                  .find((candidate) => candidate && String(candidate.id) === planWorker);
+                if (own) point = own;
+              }
+              onPlanPointClickRef.current?.(point);
               return;
             }
 
@@ -283,7 +302,8 @@ const Map: React.FC<MapProps> = ({
               pointsRef.current
             ) {
               const [lon, lat] = info.coordinate;
-              const nearest = findNearestUserPoint(pointsRef.current, lat, lon, 0.008);
+              const planWorker = planWorkerIdRef.current != null ? String(planWorkerIdRef.current) : null;
+              const nearest = findNearestUserPoint(pointsRef.current, lat, lon, 0.008, planWorker);
               if (nearest) {
                 onPlanPointClickRef.current?.(nearest);
                 return;

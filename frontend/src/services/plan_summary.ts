@@ -19,16 +19,15 @@ export function summarizeDay({
   times,
   departure,
   finishTime,
-  serviceMinutes,
   km,
 }: {
   times: ScheduledVisit[];
   departure: number;
   finishTime: number;
-  serviceMinutes: number;
   km: number | null;
 }): DaySummary {
-  const attendMin = times.length * serviceMinutes;
+  // Cada visita dura lo suyo (duración por usuaria)
+  const attendMin = times.reduce((sum, time) => sum + (time.end - time.start), 0);
   const waitMin = times.reduce((sum, time) => sum + time.wait, 0);
   const travelMin = Math.max(0, finishTime - departure - attendMin - waitMin);
   return { visits: times.length, attendMin, travelMin, waitMin, km };

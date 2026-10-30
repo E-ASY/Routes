@@ -45,6 +45,20 @@ const DEFAULT_SERVICE_MINUTES = 60;
 const MAX_LABELS_PER_STATE = 64;
 const EPS = 1e-6;
 
+/**
+ * Duración de cada visita (minutos), en el orden de `visits`. `serviceMinutes` puede ser
+ * un número (la misma para todas) o una lista con una duración por visita.
+ * @param {number|number[]|undefined} serviceMinutes
+ * @param {number} count
+ * @returns {number[]}
+ */
+function visitDurations(serviceMinutes, count) {
+  return Array.from({ length: count }, (_, i) => {
+    const value = Array.isArray(serviceMinutes) ? serviceMinutes[i] : serviceMinutes;
+    return Number.isFinite(value) && value > 0 ? value : DEFAULT_SERVICE_MINUTES;
+  });
+}
+
 /** Objetivos que la trabajadora puede elegir */
 const GOALS = ['distance', 'finish', 'idle'];
 
@@ -122,8 +136,10 @@ function insertLabel(list, label) {
  * (así la trabajadora sale más tarde y espera menos entre visitas).
  */
 function buildSchedule(sequence, ctx) {
-  const { T, D, origin, endNode, finish, service, shift } = ctx;
+  const { T, D, origin, endNode, finish, services, shift } = ctx;
   const n = sequence.length;
+  // Duración de cada visita de la secuencia (por su posición en las visitas enviadas)
+  const service = sequence.map((step) => services[step.position]);
   const starts = new Array(n);
   let t = shift.start;
   let prevNode = origin;
@@ -131,11 +147,11 @@ function buildSchedule(sequence, ctx) {
     const { visit, interval } = sequence[i];
     const arrival = t + T[prevNode][visit];
     starts[i] = Math.max(arrival, interval[0]);
-    t = starts[i] + service;
+    t = starts[i] + service[i];
     prevNode = visit;
   }
   for (let i = n - 2; i >= 0; i--) {
-    const latest = starts[i + 1] - service - T[sequence[i].visit][sequence[i + 1].visit];
+    const latest = starts[i + 1] - service[i] - T[sequence[i].visit][sequence[i + 1].visit];
     starts[i] = Math.max(starts[i], Math.min(sequence[i].interval[1], latest));
   }
 
@@ -155,8 +171,8 @@ function buildSchedule(sequence, ctx) {
     idle += wait;
     // Retraso: empieza después del último inicio que permite su franja (o de su hora fija)
     const late = Math.max(0, starts[i] - sequence[i].interval[1]);
-    visits.push({ node, arrival, start: starts[i], end: starts[i] + service, wait, late });
-    prevEnd = starts[i] + service;
+    visits.push({ node, arrival, start: starts[i], end: starts[i] + service[i], wait, late });
+    prevEnd = starts[i] + service[i];
     prevNode = node;
   }
 
@@ -199,7 +215,7 @@ const COMPARE = Object.fromEntries(
  *   shift: {start:number, end:number},  // jornada (minutos desde medianoche)
  *   finish?: 'start'|'last'|'custom',   // volver, acabar en la última visita u otro sitio
  *   endNode?: number|null,       // nodo de la llegada con finish === 'custom'
- *   serviceMinutes?: number,
+ *   serviceMinutes?: number|number[], // una para todas o una por visita (mismo orden)
  *   sequential?: boolean,        // solo el orden dado (visitas 0, 1, 2…), para evaluateOrder
  *   soft?: boolean,              // franjas y jornada blandas: llegar tarde se permite y se cuenta
  * }} input
@@ -222,9 +238,9 @@ function scheduleVisits(input) {
   const finish = input.finish ?? 'start';
   const endNode = finish === 'custom' ? input.endNode : null;
   const shift = input.shift;
-  const service = input.serviceMinutes ?? DEFAULT_SERVICE_MINUTES;
   const visitNodes = input.visits;
   const m = visitNodes.length;
+  const services = visitDurations(input.serviceMinutes, m);
   if (finish === 'custom' && (endNode == null || !Number.isInteger(endNode))) {
     throw new Error('Con llegada en otro sitio se requiere endNode');
   }
@@ -233,14 +249,14 @@ function scheduleVisits(input) {
 
   const sequential = Boolean(input.sequential);
   const soft = Boolean(input.soft);
-  const intervals = visitNodes.map((_, i) => startIntervals(input.windows?.[i], shift, service, soft));
+  const intervals = visitNodes.map((_, i) => startIntervals(input.windows?.[i], shift, services[i], soft));
   const closing = (node) =>
     finish === 'start' ? T[node][origin] : finish === 'custom' ? T[node][endNode] : 0;
 
   // labels[mask * m + j]: etiquetas del estado (mask, última visita j)
   const labels = new Array((1 << m) * m);
   let truncated = false;
-  const ctx = { T, D, origin, endNode, finish, service, shift };
+  const ctx = { T, D, origin, endNode, finish, services, shift };
 
   // Con franjas duras no se puede acabar una visita después de la jornada
   const pastShift = (label) => !soft && label.E > shift.end + EPS;
@@ -256,7 +272,7 @@ function scheduleVisits(input) {
       }
       const start = Math.max(arrival, a);
       const label = {
-        E: start + service,
+        E: start + services[j],
         slack: b - start,
         dist: D[origin][node],
         idle: 0,
@@ -273,7 +289,7 @@ function scheduleVisits(input) {
     if (soft && lateInterval) {
       // Llega tarde a la última franja que ya pasó: empieza nada más llegar
       const label = {
-        E: arrival + service,
+        E: arrival + services[j],
         slack: 0,
         dist: D[origin][node],
         idle: 0,
@@ -309,7 +325,7 @@ function scheduleVisits(input) {
             const shiftBy = Math.min(wait, L.slack);
             const start = Math.max(arrival + shiftBy, a);
             const label = {
-              E: start + service,
+              E: start + services[k],
               slack: Math.min(L.slack - shiftBy, b - start),
               dist: L.dist + D[from][to],
               idle: L.idle + (wait - shiftBy),
@@ -324,7 +340,7 @@ function scheduleVisits(input) {
           }
           if (soft && lateInterval) {
             const label = {
-              E: arrival + service,
+              E: arrival + services[k],
               slack: 0,
               dist: L.dist + D[from][to],
               idle: L.idle,
@@ -447,6 +463,9 @@ function planDay(input) {
     ...input,
     visits: keep.map((i) => input.visits[i]),
     windows: keep.map((i) => input.windows?.[i] ?? []),
+    serviceMinutes: Array.isArray(input.serviceMinutes)
+      ? keep.map((i) => input.serviceMinutes[i])
+      : input.serviceMinutes,
     soft: true,
   });
   const options = sub.options.map((option) => ({
@@ -491,7 +510,7 @@ function evaluateOrder(input) {
 
   const T = input.durations;
   const shift = input.shift;
-  const service = input.serviceMinutes ?? DEFAULT_SERVICE_MINUTES;
+  const services = visitDurations(input.serviceMinutes, m);
   const finish = input.finish ?? 'start';
   const ctx = {
     T,
@@ -499,7 +518,7 @@ function evaluateOrder(input) {
     origin: input.origin,
     endNode: finish === 'custom' ? input.endNode : null,
     finish,
-    service,
+    services,
     shift,
   };
   const conflicts = [];
@@ -509,7 +528,7 @@ function evaluateOrder(input) {
   for (let j = 0; j < m; j++) {
     const node = input.visits[j];
     const arrival = t + T[prevNode][node];
-    const options = startIntervals(input.windows?.[j], shift, service, true);
+    const options = startIntervals(input.windows?.[j], shift, services[j], true);
     let interval = options.find(([, b]) => b >= arrival - EPS);
     let start;
     if (interval) {
@@ -526,7 +545,7 @@ function evaluateOrder(input) {
       }
     }
     sequence.push({ position: j, visit: node, interval: interval ? [interval[0], interval[1]] : [start, start] });
-    t = start + service;
+    t = start + services[j];
     prevNode = node;
   }
 
@@ -567,5 +586,6 @@ module.exports = {
   startIntervals,
   buildSchedule,
   DEFAULT_SERVICE_MINUTES,
+  visitDurations,
   GOALS,
 };

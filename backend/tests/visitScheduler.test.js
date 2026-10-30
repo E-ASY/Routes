@@ -343,6 +343,17 @@ describe('evaluateOrder (orden manual)', () => {
     assert.equal(r.option.overtime_min, 30);
   });
 
+  it('duración distinta por visita: cada una ocupa la suya y empuja a la siguiente', () => {
+    // A 30 min y B 90 min, sin franjas: A 8:10–8:40, B 8:50–10:20, vuelta 10:30
+    const r = evaluateOrder({ ...base, windows: [[], []], serviceMinutes: [30, 90] });
+    assert.deepEqual(r.conflicts, []);
+    const [a, b] = r.option.visits;
+    assert.equal(a.end - a.start, 30);
+    assert.equal(b.end - b.start, 90);
+    assert.equal(b.start, H(8, 50));
+    assert.equal(r.option.finish_time, H(10, 30));
+  });
+
   it('franja que sigue después de la jornada: dentro de su franja no llega tarde', () => {
     // B disponible de 9 a 11; la jornada acaba a las 10
     const r = evaluateOrder({
@@ -406,6 +417,19 @@ describe('planDay (solo se apartan las visitas imposibles)', () => {
     // Alargar la jornada no es llegar tarde a ninguna visita
     assert.equal(r.options[0].late_min, 0);
     assert.ok(r.options[0].visits.every((v) => v.late === 0));
+  });
+
+  it('la duración de cada visita sigue a su usuaria aunque otra se aparte', () => {
+    // A y B solo a las 9 (se solapan, una va a otro día); C dura 2 h
+    const r = planDay({
+      ...base,
+      visits: [1, 2, 3],
+      windows: [[{ start: H(9), end: H(10) }], [{ start: H(9), end: H(10) }], []],
+      serviceMinutes: [60, 60, 120],
+    });
+    assert.equal(r.unscheduled.length, 1);
+    const c = r.options[0].visits.find((v) => v.visit === 2);
+    assert.equal(c.end - c.start, 120);
   });
 
   it('si todo cabe a tiempo coincide con scheduleVisits', () => {
@@ -485,6 +509,11 @@ describe('parseScheduleBody', () => {
     assert.equal(r.mode, 'manual');
     assert.deepEqual(r.fixedStarts, [H(10)]);
     assert.equal(parseScheduleBody({ ...body, fixedStarts: [] }).ok, false);
+    // Duración: una para todas o una por visita (5 min – 8 h)
+    assert.deepEqual(parseScheduleBody({ ...body, serviceMinutes: [45] }).serviceMinutes, [45]);
+    assert.equal(parseScheduleBody({ ...body, serviceMinutes: 90 }).ok, true);
+    assert.equal(parseScheduleBody({ ...body, serviceMinutes: [45, 60] }).ok, false);
+    assert.equal(parseScheduleBody({ ...body, serviceMinutes: [500] }).ok, false);
     assert.deepEqual(parseScheduleBody({ ...body, fixedStarts: undefined }).fixedStarts, [null]);
   });
   it('rechaza nº de franjas distinto al de visitas y franjas invertidas', () => {
