@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React from 'react';
 import {
   Box,
   Drawer,
@@ -20,12 +20,17 @@ import UserInfoPanel from './user_info';
 export type ChromeSheet = 'filters' | 'plan' | 'legend' | 'data' | 'account' | null;
 
 interface AppChromeProps {
+  /** Panel abierto; lo controla App (el plan puede abrirlo o cerrarlo) */
+  sheet: ChromeSheet;
+  onSheetChange: (sheet: ChromeSheet) => void;
   filters: React.ReactNode;
   plan: React.ReactNode;
   legend: React.ReactNode;
   data: React.ReactNode;
   children: React.ReactNode;
   planningActive?: boolean;
+  /** Franja sobre el mapa mientras no hay panel abierto; recibe cómo abrir un panel */
+  statusBar?: (openSheet: (sheet: Exclude<ChromeSheet, null>) => void) => React.ReactNode;
 }
 
 const NAV_ITEMS: {
@@ -52,23 +57,26 @@ const SURFACE =
   'linear-gradient(165deg, rgba(236, 244, 241, 0.96) 0%, rgba(220, 232, 228, 0.97) 48%, rgba(210, 224, 220, 0.98) 100%)';
 
 const AppChrome: React.FC<AppChromeProps> = ({
+  sheet,
+  onSheetChange,
   filters,
   plan,
   legend,
   data,
   children,
   planningActive = false,
+  statusBar,
 }) => {
   const theme = useTheme();
   const isDesktop = useMediaQuery(theme.breakpoints.up('md'));
   const { user, onLogout } = useAuthSession();
-  const [sheet, setSheet] = useState<ChromeSheet>(null);
-
   const openSheet = (next: ChromeSheet) => {
-    setSheet((prev) => (prev === next ? null : next));
+    onSheetChange(sheet === next ? null : next);
   };
 
-  const closeSheet = () => setSheet(null);
+  const closeSheet = () => onSheetChange(null);
+  // El panel de planificación lleva agenda y horas: más ancho y más alto que el resto
+  const wide = sheet === 'plan';
 
   const panels: Record<Exclude<ChromeSheet, null>, React.ReactNode> = {
     filters,
@@ -117,7 +125,7 @@ const AppChrome: React.FC<AppChromeProps> = ({
 
   // Mantener todos los paneles montados para no perder estado (p. ej. filtros)
   const panelBody = (
-    <Box className="AppChrome-sheetBody">
+    <Box className={`AppChrome-sheetBody${wide ? ' AppChrome-sheetBody--wide' : ''}`}>
       {sheetHeader}
       {(Object.keys(panels) as Exclude<ChromeSheet, null>[]).map((id) => (
         <Box
@@ -154,10 +162,10 @@ const AppChrome: React.FC<AppChromeProps> = ({
               left: 8,
               right: 8,
               width: 'auto',
-              maxWidth: 420,
+              maxWidth: wide ? 560 : 420,
               mx: 'auto',
               borderRadius: '18px 18px 14px 14px',
-              maxHeight: 'min(68vh, 560px)',
+              maxHeight: wide ? 'min(82vh, 760px)' : 'min(68vh, 560px)',
               mb: 'calc(62px + env(safe-area-inset-bottom, 0px))',
               zIndex: 1250,
               backgroundImage: SURFACE,
@@ -198,8 +206,9 @@ const AppChrome: React.FC<AppChromeProps> = ({
             className: 'AppChrome-sheet AppChrome-sheet--desktop',
             elevation: 0,
             sx: {
-              width: 360,
+              width: wide ? 460 : 360,
               maxWidth: '92vw',
+              transition: 'width 200ms ease',
               m: 1.5,
               height: 'calc(100% - 24px)',
               borderRadius: '16px',
@@ -216,6 +225,8 @@ const AppChrome: React.FC<AppChromeProps> = ({
           </Box>
         </Drawer>
       )}
+
+      {sheet == null && statusBar?.(onSheetChange)}
 
       <Box
         className="AppChrome-bar"
@@ -283,7 +294,7 @@ const AppChrome: React.FC<AppChromeProps> = ({
               <Typography
                 component="span"
                 sx={{
-                  fontSize: '0.58rem',
+                  fontSize: '0.7rem',
                   fontWeight: selected ? 700 : 500,
                   letterSpacing: '0.03em',
                   lineHeight: 1,

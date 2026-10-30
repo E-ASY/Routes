@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import Select, { MultiValue } from 'react-select';
 import { mapsService } from '../services/map_service';
+import { formatPersonName } from '../services/person_name';
 
 interface WorkerOption {
   label: string;
@@ -29,7 +30,7 @@ const WorkerSelector: React.FC<WorkerSelectorProps> = ({ selectedIds, onFilterCh
         if (cancelled) return;
         const workerOptions: WorkerOption[] = workers.map((worker) => ({
           value: worker.id.toString(),
-          label: `${worker.name || ''} ${worker.ape_1 || ''} ${worker.ape_2 || ''} (${worker.cif || ''})`,
+          label: `${formatPersonName(worker.name, worker.ape_1, worker.ape_2)} (${worker.cif || ''})`,
         }));
         setOptions(workerOptions);
       })

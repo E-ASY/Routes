@@ -24,12 +24,12 @@ Primary UX: select workers → show assigned users on a map → routes/km → op
 - Functional components. API/auth helpers live under `frontend/src/services/`.
 - Chrome: `app_chrome.tsx` — bottom bar (mobile) / right drawer (desktop). Keep filter selection **controlled from App state** so closing the sheet does not clear the map.
 - Theme tokens: `frontend/src/theme.ts` + CSS variables in `index.css` (ink/sage surfaces, not flat white).
-- Verify from `frontend/`: `npm run lint`, `npm run build`.
+- Verify from `frontend/`: `npm run lint`, `npm run build`, `npm test` (vitest; pure helpers in `src/services/*.test.ts`).
 
 ## Backend
 
 - CommonJS (`require` / `module.exports`).
-- Routes in `backend/routes/`; domain logic in `backend/services/` (`data.js`, `snapshotStore.js`, `routes.js`, `viewport.js`).
+- Routes in `backend/routes/`; domain logic in `backend/services/` (`data.js`, `snapshotStore.js`, `routes.js`, `viewport.js`, `visitScheduler.js` for the day schedule).
 - Prefer `VELNEO_API_BASE_URL` ending in `/v2/` so `index` / `filterQuery` work. On v1 they are ignored silently.
 - Active workers: `ent_m` with `filterQuery[es_tra_sim]=1` and `filterQuery[off]=0`. Field `off` = “Baja del sistema” (not `desactivado`).
 - Snapshot: disk cache under `data/snapshots` (PERF-010). Refresh via `POST /maps/refresh-snapshot` or `npm run snapshot:refresh`.

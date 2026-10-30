@@ -96,7 +96,94 @@ function parseMunicipalities(value, opts = {}) {
   });
 }
 
+/** PERF-013: misma cota que POST /legs (partida + 14 visitas + llegada). */
+const MAX_PLAN_POINTS = 16;
+
+const latLonSchema = z.object({
+  lat: z.number().finite().min(-90).max(90),
+  lon: z.number().finite().min(-180).max(180),
+});
+
+/** Franjas de disponibilidad por usuaria (p. ej. mañana y tarde) */
+const MAX_WINDOWS_PER_VISIT = 4;
+const MINUTES_PER_DAY = 24 * 60;
+
+const minuteSchema = z.number().int().min(0).max(MINUTES_PER_DAY);
+/** Duración de una visita: de 5 min a 8 h */
+const serviceMinuteSchema = z.number().int().min(5).max(480);
+
+const timeRangeSchema = z
+  .object({ start: minuteSchema, end: minuteSchema })
+  .refine((r) => r.end > r.start, { message: 'Cada franja debe acabar después de empezar' });
+
+const scheduleBodySchema = z
+  .object({
+    points: z
+      .array(latLonSchema)
+      .min(2, 'Se requieren al menos 2 puntos (partida + 1 visita)')
+      .max(MAX_PLAN_POINTS, `Máximo ${MAX_PLAN_POINTS} puntos (partida + visitas + llegada)`),
+    // start = volver a la partida, last = acabar en la última visita, custom = último punto es la llegada
+    finish: z.enum(['start', 'last', 'custom']),
+    shift: timeRangeSchema,
+    // Una lista por visita (mismo orden que points sin partida ni llegada); vacía = cualquier hora
+    windows: z.array(z.array(timeRangeSchema).max(MAX_WINDOWS_PER_VISIT)),
+    // Una duración para todas o una por visita (mismo orden que windows)
+    serviceMinutes: z.union([serviceMinuteSchema, z.array(serviceMinuteSchema)]).optional(),
+    // optimize = buscar el mejor orden; manual = horario del orden dado (points tal cual)
+    mode: z.enum(['optimize', 'manual']).optional(),
+    goal: z.enum(['distance', 'finish', 'idle']).optional(),
+    // Hora fija de inicio por visita (null = sin fijar); manda sobre sus franjas
+    fixedStarts: z.array(minuteSchema.nullable()).optional(),
+  })
+  .refine((b) => b.finish !== 'custom' || b.points.length >= 3, {
+    message: 'Con llegada se requieren al menos 3 puntos (partida + 1 visita + llegada)',
+  })
+  .refine((b) => b.windows.length === b.points.length - 1 - (b.finish === 'custom' ? 1 : 0), {
+    message: 'body.windows debe tener una lista de franjas por visita',
+  })
+  .refine((b) => !b.fixedStarts || b.fixedStarts.length === b.windows.length, {
+    message: 'body.fixedStarts debe tener un valor por visita',
+  })
+  .refine((b) => !Array.isArray(b.serviceMinutes) || b.serviceMinutes.length === b.windows.length, {
+    message: 'body.serviceMinutes debe tener una duración por visita',
+  });
+
+/**
+ * Valida el body de POST /maps/schedule-visits.
+ * @param {unknown} body
+ */
+function parseScheduleBody(body) {
+  const result = scheduleBodySchema.safeParse(body ?? {});
+  if (!result.success) {
+    const first = result.error.issues[0];
+    if (first && first.code === 'custom') {
+      return { ok: false, status: 400, error: first.message };
+    }
+    const isCount = first && first.path.length === 1 && first.path[0] === 'points'
+      && (first.code === 'too_big' || first.code === 'too_small');
+    return {
+      ok: false,
+      status: 400,
+      error: isCount ? first.message : 'Body inválido: revisa puntos, jornada y franjas',
+    };
+  }
+  const data = result.data;
+  return {
+    ok: true,
+    points: data.points.map(({ lat, lon }) => ({ lat, lon })),
+    finish: data.finish,
+    shift: data.shift,
+    windows: data.windows,
+    serviceMinutes: data.serviceMinutes,
+    mode: data.mode ?? 'optimize',
+    goal: data.goal ?? 'finish',
+    fixedStarts: data.fixedStarts ?? data.windows.map(() => null),
+  };
+}
+
 module.exports = {
+  MAX_PLAN_POINTS,
+  parseScheduleBody,
   MAX_WORKERS,
   MAX_MUNICIPALITIES,
   idSchema,

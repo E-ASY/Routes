@@ -1,22 +1,36 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useCallback, useEffect, useRef } from 'react';
 import maplibregl from 'maplibre-gl';
-import { Deck } from '@deck.gl/core';
+import { Deck, FlyToInterpolator } from '@deck.gl/core';
 import { IconLayer, PathLayer, ScatterplotLayer, TextLayer } from '@deck.gl/layers';
 
 const ORIGIN_ICON_URL = `${import.meta.env.BASE_URL}icons/origin-person.svg`;
+const WORKER_HOME_ICON_URL = `${import.meta.env.BASE_URL}icons/worker-home.svg`;
+const END_ICON_URL = `${import.meta.env.BASE_URL}icons/end-flag.svg`;
 import { CircularProgress, Backdrop, Paper, Typography } from '@mui/material';
 
-import { LegsResult, MapPoint, VisitPlanPoint } from '../services/map_service';
+import { LegsResult, MapPoint, VisitPlanPoint, WorkerRoute } from '../services/map_service';
+import { formatMinutes } from '../services/time_ranges';
+import { formatPersonName } from '../services/person_name';
 
 interface MapProps {
   workers: string[];
   points: MapPoint[] | null;
-  routes: any[] | null;
+  routes: WorkerRoute[] | null;
   isLoading?: boolean;
   planningMode?: boolean;
   planOrigin?: VisitPlanPoint | null;
   planStops?: VisitPlanPoint[];
+  /** Llegada distinta de la partida (acabar en otro sitio) */
+  planEnd?: VisitPlanPoint | null;
+  /** Trabajadora de la ruta en planificación: las usuarias de las demás se atenúan */
+  planWorkerId?: string | number | null;
   planLegs?: LegsResult | null;
+  /** Hora de inicio de cada visita (minutos desde medianoche), si hay horario */
+  planStopTimes?: number[] | null;
+  /** Visita resaltada (tocada en el mapa o en su tarjeta) */
+  planSelectedIndex?: number | null;
+  /** Centrar el mapa aquí; `nonce` distinto repite el vuelo al mismo sitio */
+  focus?: { lat: number; lon: number; nonce: number } | null;
   onPlanPointClick?: (point: MapPoint) => void;
   onPlanMapClick?: (lat: number, lon: number) => void;
 }
@@ -29,25 +43,13 @@ function escapeHtml(value: unknown): string {
     .replace(/"/g, '&quot;');
 }
 
-function formatPersonName(name?: string, ape1?: string, ape2?: string): string {
-  const n = (name || '').trim();
-  const a1 = (ape1 || '').trim();
-  const a2 = (ape2 || '').trim();
-  if (!n && !a1 && !a2) return '—';
-  if (!n) return [a1, a2].filter(Boolean).join(' ');
-
-  const lower = n.toLocaleLowerCase('es');
-  const alreadyHasApe =
-    (Boolean(a1) && lower.includes(a1.toLocaleLowerCase('es'))) ||
-    (Boolean(a2) && lower.includes(a2.toLocaleLowerCase('es')));
-  if (alreadyHasApe) return n;
-
-  return [n, a1, a2].filter(Boolean).join(' ');
+function formatTooltipName(name?: string, ape1?: string, ape2?: string): string {
+  return formatPersonName(name, ape1, ape2) || '—';
 }
 
 function pointTooltipHtml(point: MapPoint): string {
   if (point.kind === 'worker') {
-    const workerFull = formatPersonName(point.workerName, point.workerApe1, point.workerApe2);
+    const workerFull = formatTooltipName(point.workerName, point.workerApe1, point.workerApe2);
     const cif = point.workerCif ? escapeHtml(point.workerCif) : '—';
     return `
       <div style="font-family:system-ui,sans-serif;font-size:12px;line-height:1.45;max-width:260px">
@@ -58,8 +60,8 @@ function pointTooltipHtml(point: MapPoint): string {
     `;
   }
 
-  const userFull = formatPersonName(point.userName, point.userApe1, point.userApe2);
-  const workerFull = formatPersonName(point.workerName, point.workerApe1, point.workerApe2);
+  const userFull = formatTooltipName(point.userName, point.userApe1, point.userApe2);
+  const workerFull = formatTooltipName(point.workerName, point.workerApe1, point.workerApe2);
   const cif = point.userCif ? escapeHtml(point.userCif) : '—';
   const mun = point.userMunId != null && point.userMunId !== ''
     ? escapeHtml(point.userMunId)
@@ -77,17 +79,22 @@ function pointTooltipHtml(point: MapPoint): string {
   `;
 }
 
-/** Distancia aproximada en grados; umbral ~0.008 ≈ 800–900 m en Canarias */
+/**
+ * Distancia aproximada en grados; umbral ~0.008 ≈ 800–900 m en Canarias.
+ * Con `workerId`, solo cuentan las usuarias de esa trabajadora (la del plan).
+ */
 function findNearestUserPoint(
   points: MapPoint[],
   lat: number,
   lon: number,
-  maxDist: number
+  maxDist: number,
+  workerId: string | null = null
 ): MapPoint | null {
   let best: MapPoint | null = null;
   let bestD = maxDist;
   for (const p of points) {
     if (p.kind === 'worker') continue;
+    if (workerId != null && String(p.id) !== workerId) continue;
     const d = Math.hypot(Number(p.lat) - lat, Number(p.lon) - lon);
     if (d < bestD) {
       bestD = d;
@@ -97,6 +104,21 @@ function findNearestUserPoint(
   return best;
 }
 
+const WORKER_COLORS: [number, number, number][] = [
+  [102, 197, 204],
+  [246, 207, 113],
+  [248, 156, 116],
+  [220, 176, 242],
+  [135, 197, 95],
+  [158, 185, 243],
+  [254, 136, 177],
+  [201, 219, 116],
+  [139, 224, 164],
+  [180, 151, 231],
+  [211, 180, 132],
+  [179, 179, 179],
+];
+
 const Map: React.FC<MapProps> = ({
   workers,
   points,
@@ -105,7 +127,12 @@ const Map: React.FC<MapProps> = ({
   planningMode = false,
   planOrigin = null,
   planStops = [],
+  planEnd = null,
+  planWorkerId = null,
   planLegs = null,
+  planStopTimes = null,
+  planSelectedIndex = null,
+  focus = null,
   onPlanPointClick,
   onPlanMapClick,
 }) => {
@@ -116,6 +143,9 @@ const Map: React.FC<MapProps> = ({
   const onPlanMapClickRef = useRef(onPlanMapClick);
   const pointsRef = useRef(points);
   const hasOriginRef = useRef(Boolean(planOrigin));
+  const planWorkerIdRef = useRef(planWorkerId);
+  // Última vista del mapa, para volar a una visita sin perder giro ni inclinación
+  const viewStateRef = useRef<Record<string, unknown> | null>(null);
 
   useEffect(() => {
     planningModeRef.current = planningMode;
@@ -132,28 +162,18 @@ const Map: React.FC<MapProps> = ({
   useEffect(() => {
     hasOriginRef.current = Boolean(planOrigin);
   }, [planOrigin]);
+  useEffect(() => {
+    planWorkerIdRef.current = planWorkerId;
+  }, [planWorkerId]);
 
-  const WORKER_COLORS = [
-    [102, 197, 204],
-    [246, 207, 113],
-    [248, 156, 116],
-    [220, 176, 242],
-    [135, 197, 95],
-    [158, 185, 243],
-    [254, 136, 177],
-    [201, 219, 116],
-    [139, 224, 164],
-    [180, 151, 231],
-    [211, 180, 132],
-    [179, 179, 179]
-  ];
-
-  const getWorkerColor = (workerId: string | number): [number, number, number] => {
-    const index = workers.indexOf(String(workerId));
-    return index >= 0
-      ? WORKER_COLORS[index % WORKER_COLORS.length] as [number, number, number]
-      : [128, 128, 128];
-  };
+  // Color de cada trabajadora según su posición en la selección (mismo orden que la leyenda)
+  const getWorkerColor = useCallback(
+    (workerId: string | number): [number, number, number] => {
+      const index = workers.indexOf(String(workerId));
+      return index >= 0 ? WORKER_COLORS[index % WORKER_COLORS.length] : [128, 128, 128];
+    },
+    [workers]
+  );
 
   useEffect(() => {
     const initializeMap = async () => {
@@ -262,7 +282,17 @@ const Map: React.FC<MapProps> = ({
             if (!planningModeRef.current) return;
 
             if (info.object && (info.layer?.id === 'user-points' || info.layer?.id === 'worker-homes')) {
-              onPlanPointClickRef.current?.(info.object as MapPoint);
+              let point = info.object as MapPoint;
+              // Puntos superpuestos de varias trabajadoras: elegir el de la trabajadora del plan
+              const planWorker = planWorkerIdRef.current != null ? String(planWorkerIdRef.current) : null;
+              if (point.kind !== 'worker' && planWorker != null && String(point.id) !== planWorker) {
+                const own = deckRef.current
+                  ?.pickMultipleObjects({ x: info.x, y: info.y, radius: 12, layerIds: ['user-points'], depth: 20 })
+                  .map((picked) => picked.object as MapPoint)
+                  .find((candidate) => candidate && String(candidate.id) === planWorker);
+                if (own) point = own;
+              }
+              onPlanPointClickRef.current?.(point);
               return;
             }
 
@@ -274,19 +304,22 @@ const Map: React.FC<MapProps> = ({
               pointsRef.current
             ) {
               const [lon, lat] = info.coordinate;
-              const nearest = findNearestUserPoint(pointsRef.current, lat, lon, 0.008);
+              const planWorker = planWorkerIdRef.current != null ? String(planWorkerIdRef.current) : null;
+              const nearest = findNearestUserPoint(pointsRef.current, lat, lon, 0.008, planWorker);
               if (nearest) {
                 onPlanPointClickRef.current?.(nearest);
                 return;
               }
             }
 
-            if (!hasOriginRef.current && info.coordinate && info.coordinate.length >= 2) {
+            // Zona vacía: App decide si fija/mueve la partida, fija la llegada o lo ignora
+            if (info.coordinate && info.coordinate.length >= 2) {
               const [lon, lat] = info.coordinate;
               onPlanMapClickRef.current?.(lat, lon);
             }
           },
           onViewStateChange: ({ viewState }) => {
+            viewStateRef.current = viewState as Record<string, unknown>;
             if (mapRef.current) {
               mapRef.current.jumpTo({
                 center: [viewState.longitude, viewState.latitude],
@@ -331,8 +364,8 @@ const Map: React.FC<MapProps> = ({
         new PathLayer({
           id: 'worker-routes',
           data: routes.filter((r) => Array.isArray(r.polyline) && r.polyline.length > 0),
-          getPath: (d) => d.polyline,
-          getColor: (d) => getWorkerColor(d.worker_id),
+          getPath: (d: WorkerRoute) => d.polyline ?? [],
+          getColor: (d: WorkerRoute) => getWorkerColor(d.worker_id),
           getWidth: 4,
           widthUnits: 'meters',
           widthMinPixels: 2,
@@ -355,14 +388,18 @@ const Map: React.FC<MapProps> = ({
             id: 'user-points',
             data: userPoints,
             getPosition: (d: MapPoint) => [d.lon, d.lat],
-            getFillColor: (d: MapPoint) => getWorkerColor(d.id),
+            getFillColor: (d: MapPoint): [number, number, number, number] => {
+              const dimmed =
+                planningMode && planWorkerId != null && String(d.id) !== String(planWorkerId);
+              return [...getWorkerColor(d.id), dimmed ? 55 : 255];
+            },
             getRadius: 120,
             radiusUnits: 'meters',
             radiusMinPixels: 6,
             radiusMaxPixels: 15,
             pickable: true,
             updateTriggers: {
-              getFillColor: workers
+              getFillColor: [workers, planningMode, planWorkerId]
             }
           })
         );
@@ -370,19 +407,19 @@ const Map: React.FC<MapProps> = ({
 
       if (workerHomes.length > 0) {
         layers.push(
-          new ScatterplotLayer({
+          // Domicilio de cada trabajadora seleccionada: icono de casa centrado en el punto
+          new IconLayer({
             id: 'worker-homes',
             data: workerHomes,
             getPosition: (d: MapPoint) => [d.lon, d.lat],
-            getFillColor: [220, 38, 38],
-            getLineColor: [255, 255, 255],
-            getRadius: 320,
-            radiusUnits: 'meters',
-            radiusMinPixels: 14,
-            radiusMaxPixels: 32,
-            lineWidthMinPixels: 4,
-            stroked: true,
-            filled: true,
+            getIcon: () => ({
+              url: WORKER_HOME_ICON_URL,
+              width: 64,
+              height: 64,
+              anchorY: 32,
+            }),
+            getSize: 36,
+            sizeUnits: 'pixels',
             pickable: true,
           })
         );
@@ -403,6 +440,26 @@ const Map: React.FC<MapProps> = ({
             getWidth: 5,
             widthUnits: 'meters',
             widthMinPixels: 3,
+            pickable: false,
+          })
+        );
+      }
+
+      const selectedStop = planSelectedIndex != null ? planStops[planSelectedIndex] : undefined;
+      if (selectedStop) {
+        // Halo ámbar bajo el número de la visita resaltada
+        layers.push(
+          new ScatterplotLayer({
+            id: 'plan-selected',
+            data: [selectedStop],
+            getPosition: (d: VisitPlanPoint) => [d.lon, d.lat],
+            getFillColor: [245, 158, 11, 90],
+            getLineColor: [245, 158, 11, 255],
+            radiusUnits: 'pixels',
+            getRadius: 30,
+            lineWidthMinPixels: 3,
+            stroked: true,
+            filled: true,
             pickable: false,
           })
         );
@@ -456,6 +513,37 @@ const Map: React.FC<MapProps> = ({
             parameters: { depthTest: false },
           })
         );
+        if (planStopTimes && planStopTimes.length === planStops.length) {
+          // Hora de la visita en una etiqueta bajo el número
+          const timed = planStops.map((stop, index) => ({
+            ...stop,
+            timeLabel: formatMinutes(planStopTimes[index]),
+          }));
+          layers.push(
+            new TextLayer({
+              id: 'plan-stop-times',
+              data: timed,
+              getPosition: (d: VisitPlanPoint & { timeLabel: string }) => [d.lon, d.lat],
+              getText: (d: { timeLabel: string }) => d.timeLabel,
+              getSize: 12,
+              sizeUnits: 'pixels',
+              getPixelOffset: [0, 30],
+              getColor: [20, 50, 60],
+              getTextAnchor: 'middle',
+              getAlignmentBaseline: 'center',
+              fontFamily: 'Arial, Helvetica, sans-serif',
+              fontWeight: 700,
+              characterSet: '0123456789:',
+              background: true,
+              getBackgroundColor: [255, 255, 255, 235],
+              getBorderColor: [30, 64, 175],
+              getBorderWidth: 1,
+              backgroundPadding: [5, 2, 5, 2],
+              pickable: false,
+              parameters: { depthTest: false },
+            })
+          );
+        }
       }
 
       if (planOrigin) {
@@ -477,13 +565,65 @@ const Map: React.FC<MapProps> = ({
           })
         );
       }
+
+      if (planEnd) {
+        layers.push(
+          new IconLayer({
+            id: 'plan-end',
+            data: [planEnd],
+            getPosition: (d: VisitPlanPoint) => [d.lon, d.lat],
+            getIcon: () => ({
+              url: END_ICON_URL,
+              width: 64,
+              height: 80,
+              anchorY: 80,
+            }),
+            getSize: 48,
+            sizeUnits: 'pixels',
+            pickable: false,
+            parameters: { depthTest: false },
+          })
+        );
+      }
     }
 
     deckRef.current.setProps({
       layers,
       canvas: mapRef.current.getCanvas()
     });
-  }, [points, routes, workers, planningMode, planOrigin, planStops, planLegs]);
+  }, [
+    points,
+    routes,
+    workers,
+    planningMode,
+    planOrigin,
+    planStops,
+    planEnd,
+    planLegs,
+    planWorkerId,
+    planStopTimes,
+    planSelectedIndex,
+    getWorkerColor,
+  ]);
+
+  // Volar a la visita elegida desde su tarjeta
+  useEffect(() => {
+    if (!focus || !deckRef.current) return;
+    const current = viewStateRef.current ?? {};
+    const zoom = typeof current.zoom === 'number' ? Math.max(current.zoom, 13) : 13;
+    deckRef.current.setProps({
+      initialViewState: {
+        bearing: 0,
+        pitch: 30,
+        ...current,
+        latitude: focus.lat,
+        longitude: focus.lon,
+        zoom,
+        transitionDuration: 700,
+        transitionInterpolator: new FlyToInterpolator(),
+      },
+    });
+  }, [focus]);
 
   return (
     <div id="map" style={{ width: '100%', height: '100%', position: 'relative' }}>

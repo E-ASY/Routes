@@ -9,7 +9,18 @@ const dataService = require('../services/data');
 const routeService = require('../services/routes');
 const viewportService = require('../services/viewport');
 const { sendServerError } = require('../utils/errors');
-const { parseWorkers, parseMunicipalities } = require('../utils/queryParams');
+const {
+  planDay,
+  evaluateOrder,
+  visitDurations,
+  withTravelMargin,
+  annotateTravelMargins,
+} = require('../services/visitScheduler');
+const {
+  parseWorkers,
+  parseMunicipalities,
+  parseScheduleBody,
+} = require('../utils/queryParams');
 const { mapsLimiter, routesLimiter, refreshLimiter } = require('../middleware/rateLimit');
 const logger = require('../utils/logger');
 
@@ -170,6 +181,9 @@ router.post('/refresh-snapshot', refreshLimiter, async (req, res) => {
 /**
  * @route   POST /legs
  * @desc    Tramos Google entre puntos ordenados (partida + visitas)
+ * @body    { points: [{ lat, lon }, ...], returnToStart?: boolean } — con
+ *          returnToStart se añade el tramo última visita → partida. Para acabar
+ *          en otro sitio, la llegada va como último punto.
  */
 router.post('/legs', routesLimiter, async (req, res) => {
   try {
@@ -179,14 +193,92 @@ router.post('/legs', routesLimiter, async (req, res) => {
         error: 'Se requieren al menos 2 puntos en body.points [{ lat, lon }, ...]',
       });
     }
-    logger.debug(`POST /legs points_count=${points.length}`);
-    const result = await routeService.computeLegs(points);
+    const returnToStart = req.body?.returnToStart === true;
+    logger.debug(`POST /legs points_count=${points.length} return_to_start=${returnToStart}`);
+    const result = await routeService.computeLegs(points, { returnToStart });
     res.json(result);
   } catch (error) {
     if (error.status === 400) {
       return res.status(400).json({ error: error.message });
     }
     return sendServerError(res, error, 'Error al calcular tramos');
+  }
+});
+
+/**
+ * @route   POST /schedule-visits
+ * @desc    PERF-013: horario del día con franjas de disponibilidad por usuaria.
+ *          Tiempos y km por carretera (Google Route Matrix, 1 llamada; estimación si falla).
+ *          Solo aparta para otro día las visitas imposibles de encajar (franjas que se
+ *          solapan o sin hueco en la jornada); si alguna llega tarde por el viaje se
+ *          mantiene con su retraso (`late`). Hasta 3 opciones (menos km / terminar
+ *          antes / menos esperas). Cada trayecto hacia una visita lleva un margen de
+ *          tráfico y aparcamiento (10 % + 3 min); la vuelta o la llegada final, no.
+ * @body    { points: [{ lat, lon }, ...]  // partida, visitas y, con finish 'custom', llegada
+ *            finish: 'start'|'last'|'custom',
+ *            shift: { start, end },          // minutos desde medianoche
+ *            windows: [[{ start, end }], ...], // una lista por visita; vacía = cualquier hora
+ *            serviceMinutes?: number|number[], // por defecto 60; o una duración por visita
+ *            fixedStarts?: [number|null],    // hora fija por visita (manda sobre sus franjas)
+ *            mode?: 'optimize'|'manual',     // manual = horario del orden dado, con conflictos
+ *            goal?: 'distance'|'finish'|'idle' }  // criterio del horario en modo manual
+ */
+router.post('/schedule-visits', routesLimiter, async (req, res) => {
+  try {
+    const parsed = parseScheduleBody(req.body);
+    if (!parsed.ok) {
+      return res.status(parsed.status).json({ error: parsed.error });
+    }
+    const { points, finish, shift, serviceMinutes, mode, goal, fixedStarts } = parsed;
+    const services = visitDurations(serviceMinutes, parsed.windows.length);
+    // Una hora fija equivale a una franja exacta de la duración de la visita
+    const windows = parsed.windows.map((ranges, i) =>
+      fixedStarts[i] != null ? [{ start: fixedStarts[i], end: fixedStarts[i] + services[i] }] : ranges
+    );
+    const matrix = await routeService.computeTravelMatrix(points);
+    const endNode = finish === 'custom' ? points.length - 1 : null;
+    const visits = windows.map((_, i) => i + 1);
+    const input = {
+      durations: withTravelMargin(matrix.durations, visits),
+      distances: matrix.distances,
+      origin: 0,
+      visits,
+      windows,
+      shift,
+      finish,
+      endNode,
+      serviceMinutes: services,
+    };
+    if (mode === 'manual') {
+      const evaluated = evaluateOrder({ ...input, goal });
+      const manual = {
+        ...evaluated,
+        option: annotateTravelMargins(evaluated.option, matrix.durations, 0, visits),
+      };
+      logger.debug(
+        `POST /schedule-visits mode=manual visits=${visits.length} feasible=${manual.feasible} ` +
+        `conflicts=${manual.conflicts.length} travel=${matrix.source}`
+      );
+      return res.json({ mode, ...manual, service_minutes: services, travel_source: matrix.source });
+    }
+    const planned = planDay(input);
+    const result = {
+      ...planned,
+      options: planned.options.map((option) => annotateTravelMargins(option, matrix.durations, 0, visits)),
+    };
+    logger.debug(
+      `POST /schedule-visits visits=${visits.length} finish=${finish} ` +
+      `options=${result.options.length} unscheduled=${result.unscheduled.length} ` +
+      `travel=${matrix.source} exact=${result.exact} ms=${result.ms.toFixed(1)}`
+    );
+    res.json({
+      mode,
+      ...result,
+      service_minutes: services,
+      travel_source: matrix.source,
+    });
+  } catch (error) {
+    return sendServerError(res, error, 'Error al organizar el horario de visitas');
   }
 });
 

@@ -54,6 +54,18 @@
 | 2026-09-08 | docs | Limitaciones de escalado (usuarios, Velneo, Google, Redis, datos) | `issuesbacklok.md` | Sección dedicada; orientación ~10–30 usuarios / día, pocos concurrentes |
 | 2026-09-08 | UX | Botón **Refrescar datos** + fecha última actualización (global) | `map.js`, `data.js`, `data_refresh.tsx`, rateLimit | `GET /maps/data-status`, `POST /maps/refresh-snapshot`; max 2/15 min; limpia rutas Google |
 | 2026-09-08 | UX / PERF-013 | Planificador visitas: partida + orden 1…N + km tramos | `routes.js` `POST /legs`, `map.tsx`, `visit_plan_panel.tsx`, `main.tsx` | Partida mapa/usuaria/trabajadora; editar/limpiar; sin TSP |
+| 2026-10-19 | UX / PERF-013 | Horario del día con franjas por usuaria (visita 1 h, cabe entera) + jornada | `visitScheduler.js`, `routes.js` `computeTravelMatrix`, `POST /maps/schedule-visits`, `visit_schedule.tsx`, `main.tsx` | DP exacta por subconjuntos con franjas; 1 llamada Google Route Matrix (caché; estimación si falla); 3 opciones (menos km / termina antes / menos esperas); las que no caben → "Para otro día". Sin persistencia |
+| 2026-10-19 | UX / PERF-013 | Ajuste manual del horario: subir/bajar visitas y hora fija por usuaria | `visitScheduler.js` `evaluateOrder`, `schedule-visits` `mode=manual`, `visit_plan_panel.tsx`, `main.tsx` | Recalcula el horario del orden elegido (mejor horario si encaja; si no, conflictos: llega tarde / fuera de horario / fuera de jornada). Hora fija manda sobre franjas también al optimizar. Matriz Google incremental (solo filas/columnas de puntos nuevos) |
+| 2026-10-19 | UX | Panel Plan en 3 pasos (Ruta / Visitas / Horario y envío) con agenda de tarjetas y trayectos; un solo botón "Organizar" (sustituye a "Optimizar orden"); hora en los puntos del mapa; "Copiar agenda" (texto + enlaces Maps); Limpiar con Deshacer; sin barras de scroll | `visit_plan_panel.tsx`, `visit_agenda.tsx`, `plan_text.ts`, `map.tsx`, `main.tsx`, `index.css` | `POST /maps/optimize-order` queda sin uso en la UI (se mantiene en backend) |
+| 2026-10-19 | UX / PERF-013 | Llegar tarde no aparta la visita: se informa del retraso y decide la trabajadora; "otro día" solo si las franjas se solapan o no hay hueco en la jornada. Panel Plan más ancho/alto | `visitScheduler.js` `planDay` (2 fases: sin viajes → imposibles; con viajes y franjas blandas → retraso mínimo), `visit_agenda.tsx`, `visit_schedule.tsx`, `app_chrome.tsx` | Motivos: `no_fit` (solapa), `no_window` (fuera de jornada), `no_room` (sin hueco). `late` por visita, `late_min` / `overtime_min` por opción |
+| 2026-10-20 | UX / PERF-013 | Apellidos sin duplicar (en Velneo `name` de usuarias ya trae apellidos); plan guardado en el navegador (día) + franjas por usuaria; «Tu orden» en las opciones (último orden puesto a mano) | `person_name.ts`, `plan_storage.ts`, `main.tsx`, `visit_schedule.tsx` | localStorage; se borra al cerrar sesión |
+| 2026-10-20 | UX / PERF-013 | Jornada alargada ≠ «llega tarde»: en horario blando el fin de jornada no limita cada visita | `visitScheduler.js` `startIntervals(openEnd)` | «Llega tarde» solo respecto a franja u hora fija; pasarse se informa como jornada alargada |
+| 2026-10-20 | UX | Interfaz para móvil: franja de guía sobre el mapa, deshacer al quitar visita, zonas táctiles 40 px, enviar agenda (menú de compartir), mapa ↔ agenda, resumen del día, arrastrar tarjetas, abrir Plan activa la planificación, pantalla de error | `map_strip.tsx`, `plan_hint.ts`, `visit_agenda.tsx`, `visit_plan_panel.tsx`, `app_chrome.tsx`, `map.tsx`, `error_boundary.tsx` | Tests frontend con vitest (`npm test`) |
+| 2026-10-30 | UX / PERF-013 | Duración de la visita por usuaria (5 min – 8 h, 60 por defecto) | `visitScheduler.js` (`serviceMinutes` número o lista), `queryParams.js`, `visit_schedule.tsx` `DurationPicker` | Ideas tomadas de la copia de Ángela (no validadas aún por el tutor): duración por visita, errores API claros, toque limitado a la trabajadora del plan |
+| 2026-10-30 | limpieza | Eliminado `POST /maps/optimize-order` y el optimizador antiguo (`routeOptimizer.js`, sin uso desde «Organizar»); `haversineMeters` pasa a `utils/geo.js` | `routes/map.js`, `queryParams.js`, `utils/geo.js`, `map_service.ts` | Lint del frontend sin errores (rutas tipadas `WorkerRoute`) |
+| 2026-10-30 | UX / PERF-013 | Vista previa en el mapa de cada opción de Organizar (y «Tu orden») antes de aplicarla | `main.tsx`, `visit_schedule.tsx`, `plan_text.ts` | Franja «Vista previa» con Aplicar / Volver |
+| 2026-10-30 | UX / PERF-013 | Margen en cada trayecto hacia una visita: 10 % del tiempo de coche + 3 min para aparcar (fijo); la vuelta o la llegada final no lo llevan | `visitScheduler.js` `withTravelMargin` / `annotateTravelMargins`, `routes/map.js`, `visit_agenda.tsx` `TravelRow` | Decisión del usuario en vez del registro de horas reales de la copia de Ángela; la agenda muestra «12 min + 4 de margen» |
+| 2026-10-30 | PERF | Matriz de tiempos: peticiones simultáneas con los mismos puntos comparten la llamada a Google (Organizar pide a la vez opciones y «Tu orden») | `routes.js` `computeTravelMatrix` | Antes se pagaba dos veces la misma matriz con puntos nuevos. Medido: `planDay` < 0,6 s hasta 12 visitas; peor caso 14 visitas con franjas ≈ 2 s (fase 2 toca el tope de etiquetas). Pendiente: optimizar fase 2 y partir el bundle (≈ 680 KB gzip) |
 
 ### Verificación realizada / pendiente
 
@@ -192,7 +204,7 @@ No hay polling. El coste variable es **viewport** (datos + Google si miss de cac
 | PERF-010 | P3 | ETL diario / almacenamiento persistente | Escalado | open — estrategia pendiente por determinar (código prototipo) |
 | PERF-011 | P3 | Caché compartida (Redis) | Escalado | open |
 | PERF-012 | P3 | Filtros nativos en Velneo | Escalado | done parcial (código; ver notas) |
-| PERF-013 | P3 | Optimización de orden de rutas (TSP / Route Optimization) | Escalado | open |
+| PERF-013 | P3 | Optimización de orden de rutas (TSP / Route Optimization) | Escalado | done (código) — horario del día con franjas; pendiente validar con tutor |
 
 ---
 
@@ -601,8 +613,9 @@ No hay polling. El coste variable es **viewport** (datos + Google si miss de cac
 
 | Campo | Detalle |
 |-------|---------|
-| **Estado** | open |
-| **Evidencia** | [`prepareRoutePoints`](backend/services/routes.js) orden secuencial del array; no TSP |
+| **Estado** | done (código) — 2026-10-30; pendiente validación con el tutor y prueba en móvil real |
+| **Implementado** | Planificador del día (`visitScheduler.js`, `POST /maps/schedule-visits`): DP exacta por subconjuntos con franjas, jornada, duración por visita y tiempos reales de Google Route Matrix; 3 opciones + «Tu orden»; solo aparta lo imposible. Ver «Registro de avances» |
+| **Evidencia (inicial)** | [`prepareRoutePoints`](backend/services/routes.js) orden secuencial del array; no TSP. Las rutas automáticas del mapa (fuera del Plan) siguen en ese orden |
 | **Impacto** | Más km y más llamadas Google. |
 | **Solución** | Reordenar paradas o Google Route Optimization; reglas de negocio. |
 | **Dependencias** | Reglas de visita; presupuesto API |

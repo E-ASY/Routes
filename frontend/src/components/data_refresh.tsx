@@ -1,5 +1,16 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Alert, Box, Button, CircularProgress, Typography } from '@mui/material';
+import {
+  Alert,
+  Box,
+  Button,
+  CircularProgress,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogContentText,
+  DialogTitle,
+  Typography,
+} from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import { mapsService } from '../services/map_service';
 
@@ -24,6 +35,7 @@ const DataRefresh: React.FC<DataRefreshProps> = ({ onRefreshed }) => {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
   const loadStatus = useCallback(async () => {
     setLoadingStatus(true);
@@ -44,20 +56,15 @@ const DataRefresh: React.FC<DataRefreshProps> = ({ onRefreshed }) => {
   }, [loadStatus]);
 
   const handleRefresh = async () => {
+    setConfirmOpen(false);
     if (refreshing) return;
-    const confirmed = window.confirm(
-      'Se volverán a descargar los datos desde Velneo. ' +
-        'Afecta a todos los usuarios y puede tardar un minuto. ¿Continuar?'
-    );
-    if (!confirmed) return;
-
     setRefreshing(true);
     setError(null);
     setInfo(null);
     try {
       const result = await mapsService.refreshSnapshot();
       setUpdatedAt(result.updated_at);
-      setInfo('Datos actualizados. Vuelve a seleccionar trabajadoras si el mapa no se refresca solo.');
+      setInfo('Datos actualizados: el mapa y la lista de trabajadoras ya los muestran.');
       onRefreshed?.();
     } catch (err) {
       console.error(err);
@@ -76,7 +83,7 @@ const DataRefresh: React.FC<DataRefreshProps> = ({ onRefreshed }) => {
         variant="outlined"
         color="primary"
         startIcon={refreshing ? <CircularProgress size={16} color="inherit" /> : <RefreshIcon />}
-        onClick={handleRefresh}
+        onClick={() => setConfirmOpen(true)}
         disabled={refreshing}
         sx={{ minHeight: 40, justifyContent: 'flex-start' }}
       >
@@ -109,6 +116,29 @@ const DataRefresh: React.FC<DataRefreshProps> = ({ onRefreshed }) => {
           <Typography variant="caption" color="text.secondary">Descargando…</Typography>
         </Box>
       )}
+      <Dialog
+        open={confirmOpen}
+        onClose={() => setConfirmOpen(false)}
+        // Por encima del panel y de la barra inferior
+        sx={{ zIndex: 1400 }}
+        PaperProps={{ sx: { borderRadius: 3, m: 2 } }}
+      >
+        <DialogTitle sx={{ fontSize: '1rem', fontWeight: 700 }}>¿Actualizar datos?</DialogTitle>
+        <DialogContent>
+          <DialogContentText sx={{ fontSize: '0.9rem' }}>
+            Se volverán a descargar desde Velneo. Afecta a todos los usuarios de la aplicación y puede
+            tardar un minuto.
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions sx={{ px: 2, pb: 2 }}>
+          <Button onClick={() => setConfirmOpen(false)} color="inherit" sx={{ minHeight: 40 }}>
+            Cancelar
+          </Button>
+          <Button onClick={handleRefresh} variant="contained" disableElevation sx={{ minHeight: 40 }}>
+            Actualizar
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 };
