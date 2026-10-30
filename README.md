@@ -7,10 +7,16 @@ Aplicación web para visualizar en mapa las asignaciones de trabajadoras de aten
 - Login con Auth0
 - Mapa (MapLibre + deck.gl) con usuarias y trabajadoras
 - Selector de trabajadoras (sin filtro por municipio)
-- Rutas y kilometraje por trabajadora (Google Routes)
-- Modo planificación de visitas (partida + orden manual + km por tramo)
+- Rutas y kilometraje por trabajadora en coche (Google Routes)
+- Planificación del día de una trabajadora (PERF-013):
+  - partida, visitas tocando usuarias en el mapa y final (volver, acabar en la última u otro sitio)
+  - jornada, franjas de disponibilidad por usuaria (varias), hora fija y duración de cada visita
+  - **Organizar**: horario con tiempos reales de coche y 3 opciones (menos km / termina antes / menos esperas), más «Tu orden»; vista previa de cada opción en el mapa
+  - ajuste a mano (flechas o arrastrar), avisos de retraso o jornada alargada, «Para otro día» solo si es imposible encajarla
+  - agenda con resumen del día, enviar/copiar agenda y enlaces a Google Maps
+  - el plan se guarda en el navegador (el del día caduca; franjas y duraciones se recuerdan) y se borra al cerrar sesión
 - Datos Velneo cacheados en snapshot local (menos carga a la API)
-- UI compacta y responsive (barra inferior / panel lateral en desktop)
+- UI responsive pensada para móvil (barra inferior, franja de guía sobre el mapa / panel lateral en desktop)
 
 ## Estructura
 
@@ -19,13 +25,13 @@ Routes/
 ├── backend/     # Express 5 + Auth0 + Velneo + Google Routes
 │   ├── main.js
 │   ├── routes/
-│   ├── services/   # data.js, snapshotStore, routes, viewport
+│   ├── services/   # data.js, snapshotStore, routes, viewport, visitScheduler (horario)
 │   ├── scripts/    # snapshot:refresh
 │   └── tests/
 └── frontend/    # React 19 + TypeScript + Vite + MUI
     └── src/
-        ├── components/   # map, chrome, plan, filtros, leyenda…
-        ├── services/
+        ├── components/   # map, chrome, plan (agenda, opciones), filtros, leyenda…
+        ├── services/     # API, auth y lógica pura del plan (con tests *.test.ts)
         └── theme.ts
 ```
 
@@ -96,13 +102,26 @@ npm run dev
 
 App en http://localhost:5173 (backend en :5000).
 
+Comprobaciones:
+
+```bash
+npm test         # vitest
+npm run lint
+npm run build
+```
+
+En el backend, en Windows `npm test` no expande el glob: usar `node --test tests/*.test.js`.
+
 ## Uso rápido
 
 1. Inicia sesión
 2. **Filtros**: elige trabajadoras (máx. 12)
 3. El mapa carga puntos, rutas y leyenda con km
-4. **Plan**: activa planificación, fija partida y añade visitas tocando usuarias
-5. **Datos**: “Actualizar datos” regenera el snapshot Velneo (afecta a todos)
+4. **Plan** (abrirlo activa la planificación): elige a quién planificar, toca la salida y las usuarias que visitará; la franja sobre el mapa indica el siguiente paso
+5. En cada visita: **Duración**, franjas («Disponible») u hora fija; ordena con flechas o arrastrando
+6. **Organizar**: elige una opción (o «Tu orden»); el botón de mapa la muestra antes de aplicarla
+7. **Enviar/Copiar agenda** para la trabajadora (WhatsApp, correo) o abrir en Google Maps
+8. **Datos**: “Actualizar datos” regenera el snapshot Velneo (afecta a todos)
 
 ## Tecnologías
 

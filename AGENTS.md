@@ -29,7 +29,7 @@ Primary UX: select workers → show assigned users on a map → routes/km → op
 ## Backend
 
 - CommonJS (`require` / `module.exports`).
-- Routes in `backend/routes/`; domain logic in `backend/services/` (`data.js`, `snapshotStore.js`, `routes.js`, `viewport.js`).
+- Routes in `backend/routes/`; domain logic in `backend/services/` (`data.js`, `snapshotStore.js`, `routes.js`, `viewport.js`, `visitScheduler.js` for the day schedule).
 - Prefer `VELNEO_API_BASE_URL` ending in `/v2/` so `index` / `filterQuery` work. On v1 they are ignored silently.
 - Active workers: `ent_m` with `filterQuery[es_tra_sim]=1` and `filterQuery[off]=0`. Field `off` = “Baja del sistema” (not `desactivado`).
 - Snapshot: disk cache under `data/snapshots` (PERF-010). Refresh via `POST /maps/refresh-snapshot` or `npm run snapshot:refresh`.

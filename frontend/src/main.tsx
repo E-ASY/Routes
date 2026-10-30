@@ -18,14 +18,17 @@ import {
   PlanFinish,
   ManualScheduleResult,
   ScheduleGoal,
+  ScheduleOption,
   ScheduleResult,
   TimeRange,
   VisitPlanPoint,
   Worker,
+  WorkerRoute,
   mapsService,
 } from './services/map_service';
 import { formatMinutes, isValidRange } from './services/time_ranges';
 import { planHint } from './services/plan_hint';
+import { formatOptionGoals } from './services/plan_text';
 import { moveItem, optionMatchesOrder, sameVisits, stopKey } from './services/plan_order';
 import { formatPersonName } from './services/person_name';
 import {
@@ -84,7 +87,7 @@ const App: React.FC = () => {
   const [initialDraft] = useState(loadDayDraft);
   const [workers, setWorkers] = useState<string[]>(initialDraft?.workers ?? []);
   const [points, setPoints] = useState<MapPoint[] | null>(null);
-  const [routes, setRoutes] = useState<any[] | null>(null);
+  const [routes, setRoutes] = useState<WorkerRoute[] | null>(null);
   const [legendWorkers, setLegendWorkers] = useState<Worker[]>([]);
   const [mileageByWorker, setMileageByWorker] = useState<MileageByWorker | null>(null);
   const [viewportLoading, setViewportLoading] = useState(false);
@@ -147,6 +150,14 @@ const App: React.FC = () => {
   const [selectedStopKey, setSelectedStopKey] = useState<string | null>(null);
   const [mapFocus, setMapFocus] = useState<{ lat: number; lon: number; nonce: number } | null>(null);
   const [cardScrollNonce, setCardScrollNonce] = useState(0);
+  // Vista previa en el mapa de una opción de Organizar: no cambia el plan hasta pulsar "Aplicar"
+  const [preview, setPreview] = useState<{
+    key: number | 'own';
+    label: string;
+    stops: VisitPlanPoint[];
+    option: ScheduleOption | null;
+    legs: LegsResult | null;
+  } | null>(null);
 
   // PERF-013: horario del día. La disponibilidad es de la usuaria (vale para cualquier trabajadora)
   const [planShift, setPlanShift] = useState<TimeRange>(initialDraft?.current.shift ?? DEFAULT_SHIFT);
@@ -634,6 +645,7 @@ const App: React.FC = () => {
   // Abrir Plan con trabajadoras elegidas activa la planificación (el interruptor sirve para salir)
   const handleSheetChange = (next: ChromeSheet) => {
     if (next === 'plan' && !planningMode && workers.length > 0) handlePlanningModeChange(true);
+    if (next != null) setPreview(null);
     setSheet(next);
   };
 
@@ -647,6 +659,7 @@ const App: React.FC = () => {
   };
 
   const handlePlanPointClick = useCallback((point: MapPoint) => {
+    setPreview(null);
     if (planWorkerIdRef.current == null) {
       setPlanNotice('Elige primero a qué trabajadora planificar.');
       return;
@@ -749,6 +762,7 @@ const App: React.FC = () => {
       label: `Mapa (${lat.toFixed(4)}, ${lon.toFixed(4)})`,
       sourceKind: 'map',
     };
+    setPreview(null);
     if (planWorkerIdRef.current == null) {
       setPlanNotice('Elige primero a qué trabajadora planificar.');
       return;
@@ -760,6 +774,24 @@ const App: React.FC = () => {
       setPlanEnd(mapPoint);
     }
   }, []);
+
+  /** Ver en el mapa el recorrido de una opción (o de "Tu orden") sin aplicarla */
+  const handlePreviewOption = (key: number | 'own') => {
+    if (!freshRun || !planOrigin) return;
+    const option = key === 'own' ? freshRun.own?.option ?? null : freshRun.result.options[key];
+    const stops = key === 'own' ? freshRun.ownStops : option?.order.map((i) => freshRun.stops[i]);
+    if (!stops || (key !== 'own' && !option)) return;
+    setPreview({ key, label: key === 'own' || !option ? 'Tu orden' : formatOptionGoals(option), stops, option, legs: null });
+    setSelectedStopKey(null);
+    setSheet(null);
+    const points = [planOrigin, ...stops, ...(activeEnd ? [activeEnd] : [])].map((p) => ({ lat: p.lat, lon: p.lon }));
+    mapsService
+      .computeLegs(points, planReturnToStart)
+      .then((legs) => setPreview((prev) => (prev && prev.stops === stops ? { ...prev, legs } : prev)))
+      .catch(() => undefined);
+  };
+  // Si el plan cambia, la vista previa deja de valer
+  const activePreview = preview && freshRun && planningMode ? preview : null;
 
   const schedule: PlanSchedule = {
     shift: planShift,
@@ -789,10 +821,16 @@ const App: React.FC = () => {
     selectedOption: onOwnOrder ? (ownMatchIndex >= 0 ? ownMatchIndex : null) : freshRun?.selected ?? null,
     ownOrder:
       freshRun && ownMatchIndex < 0
-        ? { option: freshRun.own?.option ?? null, selected: onOwnOrder, onSelect: handleSelectOwnOrder }
+        ? {
+            option: freshRun.own?.option ?? null,
+            selected: onOwnOrder,
+            onSelect: handleSelectOwnOrder,
+            onPreview: () => handlePreviewOption('own'),
+          }
         : null,
     ownMatchIndex: ownMatchIndex >= 0 ? ownMatchIndex : null,
     onSelectOption: handleSelectScheduleOption,
+    onPreviewOption: (index) => handlePreviewOption(index),
     unscheduled:
       freshRun && shownOption
         ? shownOption.unscheduled.map((u) => ({ stop: freshRun.stops[u.visit], reason: u.reason }))
@@ -851,6 +889,9 @@ const App: React.FC = () => {
   const selectedStop = selectedIndex >= 0 ? planStops[selectedIndex] : null;
   const selectedTime = selectedIndex >= 0 ? schedule.stopTimes?.[selectedIndex] : undefined;
 
+  const previewOption = activePreview?.option ?? null;
+  const previewStarts = useMemo(() => previewOption?.visits.map((v) => v.start) ?? null, [previewOption]);
+
   const scheduleStopTimes = schedule.stopTimes;
   const planStopStarts = useMemo(
     () => scheduleStopTimes?.map((t) => t.start) ?? null,
@@ -870,6 +911,26 @@ const App: React.FC = () => {
                 message="Elige trabajadoras para ver sus usuarias en el mapa."
                 actionLabel="Elegir"
                 onAction={() => openSheet('filters')}
+              />
+            ) : activePreview ? (
+              <MapStrip
+                title={
+                  `Vista previa · ${activePreview.label}` +
+                  (activePreview.option
+                    ? ` · ${(activePreview.option.distance_m / 1000).toFixed(1)} km · acaba ${formatMinutes(
+                        activePreview.option.finish_time
+                      )}`
+                    : '')
+                }
+                message="Así quedaría la ruta. Tu plan no cambia hasta que la apliques."
+                actionLabel="Aplicar"
+                onAction={() => {
+                  if (activePreview.key === 'own') handleSelectOwnOrder();
+                  else handleSelectScheduleOption(activePreview.key);
+                  setPreview(null);
+                }}
+                secondaryLabel="Volver"
+                onSecondary={() => openSheet('plan')}
               />
             ) : planningMode && selectedStop && !planNotice ? (
               <MapStrip
@@ -970,12 +1031,12 @@ const App: React.FC = () => {
             isLoading={viewportLoading}
             planningMode={planningMode}
             planOrigin={planOrigin}
-            planStops={planStops}
+            planStops={activePreview?.stops ?? planStops}
             planEnd={activeEnd}
             planWorkerId={planWorkerId}
-            planLegs={planLegs}
-            planStopTimes={planStopStarts}
-            planSelectedIndex={selectedIndex >= 0 ? selectedIndex : null}
+            planLegs={activePreview ? activePreview.legs : planLegs}
+            planStopTimes={activePreview ? previewStarts : planStopStarts}
+            planSelectedIndex={!activePreview && selectedIndex >= 0 ? selectedIndex : null}
             focus={mapFocus}
             onPlanPointClick={handlePlanPointClick}
             onPlanMapClick={handlePlanMapClick}

@@ -3,7 +3,7 @@ const dotenv = require('dotenv');
 const { getPointsForWorkers } = require('./data');
 const logger = require('../utils/logger');
 const { logMetric } = require('../utils/observability');
-const { haversineMeters } = require('./routeOptimizer');
+const { haversineMeters } = require('../utils/geo');
 
 dotenv.config();
 

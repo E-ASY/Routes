@@ -17,8 +17,8 @@ import AddIcon from '@mui/icons-material/Add';
 import CloseIcon from '@mui/icons-material/Close';
 import UndoIcon from '@mui/icons-material/Undo';
 import TimerOutlinedIcon from '@mui/icons-material/TimerOutlined';
+import MapOutlinedIcon from '@mui/icons-material/MapOutlined';
 import {
-  ScheduleGoal,
   ScheduleOption,
   TimeRange,
   UnscheduledVisit,
@@ -26,6 +26,7 @@ import {
 } from '../services/map_service';
 import { formatMinutes, isValidRange, parseTime } from '../services/time_ranges';
 import { formatDuration } from '../services/plan_summary';
+import { formatOptionGoals } from '../services/plan_text';
 
 const timeFieldProps = {
   type: 'time',
@@ -220,11 +221,6 @@ export const FixedTimeEditor: React.FC<{
   </Box>
 );
 
-const GOAL_LABELS: Record<ScheduleGoal, string> = {
-  distance: 'Menos km',
-  finish: 'Termina antes',
-  idle: 'Menos esperas',
-};
 
 function formatOptionDetail(option: ScheduleOption): string {
   const km = (option.distance_m / 1000).toFixed(1);
@@ -251,6 +247,8 @@ export interface OwnOrderRow {
   option: ScheduleOption | null;
   selected: boolean;
   onSelect: () => void;
+  /** Ver su recorrido en el mapa sin aplicarlo */
+  onPreview?: () => void;
 }
 
 const OptionRow: React.FC<{
@@ -258,38 +256,50 @@ const OptionRow: React.FC<{
   option: ScheduleOption | null;
   selected: boolean;
   onClick: () => void;
-}> = ({ label, option, selected, onClick }) => (
-  <ListItemButton
-    selected={selected}
-    onClick={onClick}
-    sx={{
-      borderRadius: 1,
-      border: 1,
-      borderColor: selected ? 'primary.main' : 'divider',
-      mb: 0.75,
-      minHeight: 48,
-    }}
-  >
-    <ListItemText
-      primary={label}
-      secondary={
-        option ? (
-          <>
-            {formatOptionDetail(option)}
-            {formatOptionDelays(option) && (
-              <Typography component="span" variant="caption" display="block" sx={{ color: 'warning.dark' }}>
-                {formatOptionDelays(option)}
-              </Typography>
-            )}
-          </>
-        ) : (
-          'Las visitas en el orden en que las tenías'
-        )
-      }
-      primaryTypographyProps={{ variant: 'body2', fontWeight: 600 }}
-      secondaryTypographyProps={{ variant: 'caption' }}
-    />
-  </ListItemButton>
+  onPreview?: () => void;
+}> = ({ label, option, selected, onClick, onPreview }) => (
+  <Box sx={{ display: 'flex', alignItems: 'stretch', gap: 0.5, mb: 0.75 }}>
+    <ListItemButton
+      selected={selected}
+      onClick={onClick}
+      sx={{
+        borderRadius: 1,
+        border: 1,
+        borderColor: selected ? 'primary.main' : 'divider',
+        minHeight: 48,
+      }}
+    >
+      <ListItemText
+        primary={label}
+        secondary={
+          option ? (
+            <>
+              {formatOptionDetail(option)}
+              {formatOptionDelays(option) && (
+                <Typography component="span" variant="caption" display="block" sx={{ color: 'warning.dark' }}>
+                  {formatOptionDelays(option)}
+                </Typography>
+              )}
+            </>
+          ) : (
+            'Las visitas en el orden en que las tenías'
+          )
+        }
+        primaryTypographyProps={{ variant: 'body2', fontWeight: 600 }}
+        secondaryTypographyProps={{ variant: 'caption' }}
+      />
+    </ListItemButton>
+    {onPreview && (
+      <IconButton
+        aria-label={`ver ${label} en el mapa`}
+        title="Ver en el mapa"
+        onClick={onPreview}
+        sx={{ width: 44, flexShrink: 0, borderRadius: 1, border: 1, borderColor: 'divider', color: 'text.secondary' }}
+      >
+        <MapOutlinedIcon fontSize="small" />
+      </IconButton>
+    )}
+  </Box>
 );
 
 /** Opciones de horario para que la trabajadora elija una, más volver a su orden */
@@ -300,18 +310,29 @@ export const ScheduleOptions: React.FC<{
   own?: OwnOrderRow | null;
   /** Opción que coincide con el orden de la trabajadora */
   ownMatchIndex?: number | null;
-}> = ({ options, selected, onSelect, own, ownMatchIndex }) => (
+  /** Ver el recorrido de una opción en el mapa sin aplicarla */
+  onPreview?: (index: number) => void;
+}> = ({ options, selected, onSelect, own, ownMatchIndex, onPreview }) => (
   <List dense disablePadding sx={{ mt: 1 }}>
-    {own && <OptionRow label="Tu orden" option={own.option} selected={own.selected} onClick={own.onSelect} />}
+    {own && (
+      <OptionRow
+        label="Tu orden"
+        option={own.option}
+        selected={own.selected}
+        onClick={own.onSelect}
+        onPreview={own.onPreview}
+      />
+    )}
     {options.map((option, index) => (
       <OptionRow
         key={option.order.join(',')}
         label={
-          option.goals.map((goal) => GOAL_LABELS[goal]).join(' · ') + (ownMatchIndex === index ? ' · Tu orden' : '')
+          formatOptionGoals(option) + (ownMatchIndex === index ? ' · Tu orden' : '')
         }
         option={option}
         selected={selected === index}
         onClick={() => onSelect(index)}
+        onPreview={onPreview ? () => onPreview(index) : undefined}
       />
     ))}
   </List>

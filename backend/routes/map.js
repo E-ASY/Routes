@@ -9,12 +9,10 @@ const dataService = require('../services/data');
 const routeService = require('../services/routes');
 const viewportService = require('../services/viewport');
 const { sendServerError } = require('../utils/errors');
-const { optimizePlanOrder } = require('../services/routeOptimizer');
 const { planDay, evaluateOrder, visitDurations } = require('../services/visitScheduler');
 const {
   parseWorkers,
   parseMunicipalities,
-  parseOptimizeOrderBody,
   parseScheduleBody,
 } = require('../utils/queryParams');
 const { mapsLimiter, routesLimiter, refreshLimiter } = require('../middleware/rateLimit');
@@ -198,35 +196,6 @@ router.post('/legs', routesLimiter, async (req, res) => {
       return res.status(400).json({ error: error.message });
     }
     return sendServerError(res, error, 'Error al calcular tramos');
-  }
-});
-
-/**
- * @route   POST /optimize-order
- * @desc    PERF-013: orden de visitas que minimiza km (points[0] = partida fija;
- *          con endAtLast, el último punto es la llegada fija).
- *          Haversine, sin llamadas a Google; los km reales los da después /legs.
- * @body    { points: [{ lat, lon }, ...], returnToStart?: boolean, endAtLast?: boolean }
- * @returns { order, method, ms, straight_km_before, straight_km_after, changed }
- */
-router.post('/optimize-order', routesLimiter, (req, res) => {
-  try {
-    const parsed = parseOptimizeOrderBody(req.body);
-    if (!parsed.ok) {
-      return res.status(parsed.status).json({ error: parsed.error });
-    }
-    const result = optimizePlanOrder(parsed.points, {
-      returnToStart: parsed.returnToStart,
-      endAtLast: parsed.endAtLast,
-    });
-    logger.debug(
-      `POST /optimize-order points_count=${parsed.points.length} end_at_last=${parsed.endAtLast} ` +
-      `method=${result.method} ` +
-      `ms=${result.ms.toFixed(1)} changed=${result.changed}`
-    );
-    res.json(result);
-  } catch (error) {
-    return sendServerError(res, error, 'Error al optimizar el orden de visitas');
   }
 });
 

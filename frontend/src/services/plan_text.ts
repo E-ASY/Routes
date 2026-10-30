@@ -1,5 +1,17 @@
-import { PlanFinish, ScheduledVisit, VisitPlanPoint } from './map_service';
+import { PlanFinish, ScheduleGoal, ScheduleOption, ScheduledVisit, VisitPlanPoint } from './map_service';
 import { formatMinutes } from './time_ranges';
+
+/** Nombre de cada criterio de las opciones de Organizar */
+export const GOAL_LABELS: Record<ScheduleGoal, string> = {
+  distance: 'Menos km',
+  finish: 'Termina antes',
+  idle: 'Menos esperas',
+};
+
+/** "Termina antes · Menos km" */
+export function formatOptionGoals(option: ScheduleOption): string {
+  return option.goals.map((goal) => GOAL_LABELS[goal]).join(' · ');
+}
 
 interface AgendaInput {
   workerLabel: string | null;

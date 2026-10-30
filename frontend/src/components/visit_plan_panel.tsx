@@ -61,6 +61,8 @@ export interface PlanSchedule {
   options: ScheduleOption[] | null;
   selectedOption: number | null;
   onSelectOption: (index: number) => void;
+  /** Ver el recorrido de una opción en el mapa sin aplicarla */
+  onPreviewOption: (index: number) => void;
   /** Fila "Tu orden" (el orden que había al organizar); null si coincide con una opción */
   ownOrder: OwnOrderRow | null;
   /** Opción que coincide con el orden que había al organizar */
@@ -667,6 +669,7 @@ const VisitPlanPanel: React.FC<VisitPlanPanelProps> = ({
                     onSelect={schedule.onSelectOption}
                     own={schedule.ownOrder}
                     ownMatchIndex={schedule.ownMatchIndex}
+                    onPreview={schedule.onPreviewOption}
                   />
                 </>
               )}

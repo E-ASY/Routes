@@ -49,16 +49,27 @@ export interface Worker {
     disponibilidad?: number | string;
 }
 
+/** Tramo de la ruta automática de una trabajadora (Google Routes, en coche) */
+export interface WorkerRoute {
+  worker_id: string | number;
+  /** Coordenadas [lon, lat]; null si Google no devolvió ruta */
+  polyline: [number, number][] | null;
+  distance_m: number | null;
+  origin?: LatLon;
+  destination?: LatLon;
+  error?: string;
+}
+
 /**
- * Representa los datos de rutas optimizadas para trabajadores
+ * Representa los datos de rutas para trabajadores
  * @interface RouteData
- * @property {Array<any>} routes - Lista de todas las rutas calculadas
- * @property {Record<string, any[]>} workers - Rutas agrupadas por trabajador
- * @property {number} total - Número total de rutas
+ * @property {WorkerRoute[]} routes - Lista de todos los tramos calculados
+ * @property {Record<string, WorkerRoute[]>} workers - Tramos agrupados por trabajador
+ * @property {number} total - Número total de tramos
  */
 export interface RouteData {
-  routes: Array<any>;
-  workers: Record<string, any[]>;
+  routes: WorkerRoute[];
+  workers: Record<string, WorkerRoute[]>;
   total: number;
   mileage_by_worker?: MileageByWorker;
 }
@@ -76,7 +87,7 @@ export type MileageByWorker = Record<string, WorkerMileage>;
 export interface ViewportData {
   workers: Worker[];
   points: MapPoint[];
-  routes: Array<any>;
+  routes: WorkerRoute[];
   mileage_by_worker?: MileageByWorker;
   total_points: number;
   total_routes: number;
@@ -201,20 +212,6 @@ export const mapsService = {
   },
 
   /**
-   * PERF-013: orden de visitas con menos km (points[0] = partida fija). Sin llamadas a Google.
-   * Con endAtLast, el último punto es la llegada fija y no se reordena.
-   */
-  async optimizeOrder(
-    points: LatLon[],
-    { returnToStart = false, endAtLast = false }: { returnToStart?: boolean; endAtLast?: boolean } = {}
-  ): Promise<OptimizeOrderResult> {
-    return apiRequest<OptimizeOrderResult>('/maps/optimize-order', {
-      method: 'POST',
-      body: JSON.stringify({ points, returnToStart, endAtLast }),
-    });
-  },
-
-  /**
    * PERF-013: horario del día con franjas de disponibilidad. points = partida, visitas
    * y (con finish 'custom') llegada; windows = una lista de franjas por visita.
    */
@@ -305,32 +302,8 @@ export interface ScheduleResult {
   travel_source: 'google' | 'estimate' | 'mixed';
 }
 
-export interface OptimizeOrderResult {
-  /** Índices sobre los puntos enviados; order[0] === 0 (partida) y, con llegada, el último fijo */
-  order: number[];
-  method: 'exact' | 'heuristic' | 'nn';
-  ms: number;
-  straight_km_before: number;
-  straight_km_after: number;
-  changed: boolean;
-}
-
 /** Dónde acaba la trabajadora: en la última visita, de vuelta en la partida o en otro sitio */
 export type PlanFinish = 'last' | 'start' | 'custom';
-
-/** Resultado de "Optimizar orden" en el planificador */
-export interface PlanOptimization {
-  /** Visitas tal como quedaron tras optimizar (para saber si siguen vigentes) */
-  stops: VisitPlanPoint[];
-  /** Final con el que se optimizó (los km solo son comparables con el mismo final) */
-  finish: PlanFinish;
-  end: VisitPlanPoint | null;
-  changed: boolean;
-  /** Total Google del orden anterior, si estaba calculado */
-  kmBefore: number | null;
-  straightKmBefore: number;
-  straightKmAfter: number;
-}
 
 export interface DataStatus {
   updated_at: string | null;

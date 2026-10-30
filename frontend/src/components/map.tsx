@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useCallback, useEffect, useRef } from 'react';
 import maplibregl from 'maplibre-gl';
 import { Deck, FlyToInterpolator } from '@deck.gl/core';
 import { IconLayer, PathLayer, ScatterplotLayer, TextLayer } from '@deck.gl/layers';
@@ -8,14 +8,14 @@ const WORKER_HOME_ICON_URL = `${import.meta.env.BASE_URL}icons/worker-home.svg`;
 const END_ICON_URL = `${import.meta.env.BASE_URL}icons/end-flag.svg`;
 import { CircularProgress, Backdrop, Paper, Typography } from '@mui/material';
 
-import { LegsResult, MapPoint, VisitPlanPoint } from '../services/map_service';
+import { LegsResult, MapPoint, VisitPlanPoint, WorkerRoute } from '../services/map_service';
 import { formatMinutes } from '../services/time_ranges';
 import { formatPersonName } from '../services/person_name';
 
 interface MapProps {
   workers: string[];
   points: MapPoint[] | null;
-  routes: any[] | null;
+  routes: WorkerRoute[] | null;
   isLoading?: boolean;
   planningMode?: boolean;
   planOrigin?: VisitPlanPoint | null;
@@ -104,6 +104,21 @@ function findNearestUserPoint(
   return best;
 }
 
+const WORKER_COLORS: [number, number, number][] = [
+  [102, 197, 204],
+  [246, 207, 113],
+  [248, 156, 116],
+  [220, 176, 242],
+  [135, 197, 95],
+  [158, 185, 243],
+  [254, 136, 177],
+  [201, 219, 116],
+  [139, 224, 164],
+  [180, 151, 231],
+  [211, 180, 132],
+  [179, 179, 179],
+];
+
 const Map: React.FC<MapProps> = ({
   workers,
   points,
@@ -151,27 +166,14 @@ const Map: React.FC<MapProps> = ({
     planWorkerIdRef.current = planWorkerId;
   }, [planWorkerId]);
 
-  const WORKER_COLORS = [
-    [102, 197, 204],
-    [246, 207, 113],
-    [248, 156, 116],
-    [220, 176, 242],
-    [135, 197, 95],
-    [158, 185, 243],
-    [254, 136, 177],
-    [201, 219, 116],
-    [139, 224, 164],
-    [180, 151, 231],
-    [211, 180, 132],
-    [179, 179, 179]
-  ];
-
-  const getWorkerColor = (workerId: string | number): [number, number, number] => {
-    const index = workers.indexOf(String(workerId));
-    return index >= 0
-      ? WORKER_COLORS[index % WORKER_COLORS.length] as [number, number, number]
-      : [128, 128, 128];
-  };
+  // Color de cada trabajadora según su posición en la selección (mismo orden que la leyenda)
+  const getWorkerColor = useCallback(
+    (workerId: string | number): [number, number, number] => {
+      const index = workers.indexOf(String(workerId));
+      return index >= 0 ? WORKER_COLORS[index % WORKER_COLORS.length] : [128, 128, 128];
+    },
+    [workers]
+  );
 
   useEffect(() => {
     const initializeMap = async () => {
@@ -362,8 +364,8 @@ const Map: React.FC<MapProps> = ({
         new PathLayer({
           id: 'worker-routes',
           data: routes.filter((r) => Array.isArray(r.polyline) && r.polyline.length > 0),
-          getPath: (d) => d.polyline,
-          getColor: (d) => getWorkerColor(d.worker_id),
+          getPath: (d: WorkerRoute) => d.polyline ?? [],
+          getColor: (d: WorkerRoute) => getWorkerColor(d.worker_id),
           getWidth: 4,
           widthUnits: 'meters',
           widthMinPixels: 2,
@@ -601,6 +603,7 @@ const Map: React.FC<MapProps> = ({
     planWorkerId,
     planStopTimes,
     planSelectedIndex,
+    getWorkerColor,
   ]);
 
   // Volar a la visita elegida desde su tarjeta
