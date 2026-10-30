@@ -452,6 +452,9 @@ const VisitPlanPanel: React.FC<VisitPlanPanelProps> = ({
           <Collapse in={settingsOpen || !isValidRange(schedule.shift)}>
             <Box sx={{ pt: 1.25, pb: 0.5 }}>
               <ShiftEditor shift={schedule.shift} onChange={schedule.onShiftChange} />
+              <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.75, lineHeight: 1.4 }}>
+                Cada trayecto hacia una visita incluye un margen para tráfico y aparcar (10 % del viaje + 3 min).
+              </Typography>
               <Typography variant="body2" sx={{ mt: 1.25, mb: 0.75 }}>
                 Al terminar
               </Typography>
@@ -517,6 +520,7 @@ const VisitPlanPanel: React.FC<VisitPlanPanelProps> = ({
                     minutes={travelMinutes(index)}
                     km={legs?.legs?.[index]?.distance_km ?? null}
                     loading={legsLoading}
+                    margin={times?.[index]?.travel_margin ?? null}
                   />
                   <VisitCard
                     index={index}

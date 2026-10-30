@@ -59,6 +59,51 @@ function visitDurations(serviceMinutes, count) {
   });
 }
 
+/**
+ * Margen en cada trayecto hacia una visita: Google no cuenta el tráfico ni el tiempo de
+ * aparcar, y con varias visitas el desfase se acumula. La vuelta o la llegada final no lo llevan.
+ */
+const TRAVEL_MARGIN_RATIO = 0.1;
+const PARKING_MINUTES = 3;
+
+/** Minutos de margen de un trayecto de `rawMinutes` hacia una visita */
+function travelMarginMinutes(rawMinutes) {
+  return rawMinutes * TRAVEL_MARGIN_RATIO + PARKING_MINUTES;
+}
+
+/**
+ * Matriz de tiempos con el margen añadido a los trayectos que llegan a una visita.
+ * @param {number[][]} durations - minutos de viaje entre nodos (sin margen)
+ * @param {number[]} visitNodes - nodos que son visitas
+ * @returns {number[][]}
+ */
+function withTravelMargin(durations, visitNodes) {
+  const isVisit = new Set(visitNodes);
+  return durations.map((row, i) =>
+    row.map((minutes, j) => (i !== j && isVisit.has(j) ? minutes + travelMarginMinutes(minutes) : minutes))
+  );
+}
+
+/**
+ * Añade a cada visita de una opción los minutos de margen de su trayecto (para mostrarlo).
+ * @param {{ visits: Array<{ visit: number }> }} option - `visit` = posición en `visitNodes`
+ * @param {number[][]} rawDurations - minutos sin margen
+ * @param {number} origin
+ * @param {number[]} visitNodes
+ */
+function annotateTravelMargins(option, rawDurations, origin, visitNodes) {
+  let prev = origin;
+  return {
+    ...option,
+    visits: option.visits.map((v) => {
+      const node = visitNodes[v.visit];
+      const margin = Math.round(travelMarginMinutes(rawDurations[prev][node]));
+      prev = node;
+      return { ...v, travel_margin: margin };
+    }),
+  };
+}
+
 /** Objetivos que la trabajadora puede elegir */
 const GOALS = ['distance', 'finish', 'idle'];
 
@@ -587,5 +632,10 @@ module.exports = {
   buildSchedule,
   DEFAULT_SERVICE_MINUTES,
   visitDurations,
+  TRAVEL_MARGIN_RATIO,
+  PARKING_MINUTES,
+  travelMarginMinutes,
+  withTravelMargin,
+  annotateTravelMargins,
   GOALS,
 };

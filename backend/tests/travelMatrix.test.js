@@ -70,6 +70,19 @@ describe('computeTravelMatrix', () => {
     assert.ok(Math.abs(result.durations[1][3] - 10) < 1e-6);
   });
 
+  it('dos peticiones a la vez con los mismos puntos (en otro orden) pagan una sola vez a Google', async () => {
+    clearRouteCache();
+    calls.length = 0;
+    const [a, b] = await Promise.all([
+      computeTravelMatrix(points),
+      computeTravelMatrix([points[2], points[0], points[1]]),
+    ]);
+    assert.equal(calls.length, 1);
+    assert.equal(a.source, 'google');
+    assert.equal(b.source, 'google');
+    assert.ok(Math.abs(b.durations[1][0] - 10) < 1e-6); // 28.4 → 28.5 en el orden de la segunda
+  });
+
   it('si Google falla, estima con la línea recta', async () => {
     clearRouteCache();
     fail = true;

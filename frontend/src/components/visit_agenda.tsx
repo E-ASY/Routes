@@ -66,15 +66,21 @@ export const AgendaEndpoint: React.FC<{
   </Box>
 );
 
-/** Trayecto entre dos paradas: minutos (si hay horario) y km por carretera */
-export const TravelRow: React.FC<{ minutes: number | null; km: number | null; loading?: boolean }> = ({
-  minutes,
-  km,
-  loading = false,
-}) => {
-  const parts = [minutes != null ? `${minutes} min` : null, km != null ? `${km.toFixed(1)} km` : null].filter(
-    Boolean
-  );
+/** Trayecto entre dos paradas: minutos (si hay horario, con su margen) y km por carretera */
+export const TravelRow: React.FC<{
+  minutes: number | null;
+  km: number | null;
+  loading?: boolean;
+  /** Minutos de margen (tráfico + aparcar) incluidos en `minutes` */
+  margin?: number | null;
+}> = ({ minutes, km, loading = false, margin = null }) => {
+  const time =
+    minutes == null
+      ? null
+      : margin != null && margin > 0 && minutes > margin
+        ? `${minutes - margin} min + ${margin} de margen`
+        : `${minutes} min`;
+  const parts = [time, km != null ? `${km.toFixed(1)} km` : null].filter(Boolean);
   if (parts.length === 0 && !loading) return <Box sx={{ height: 8 }} />;
   return (
     <Box

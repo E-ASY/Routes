@@ -72,6 +72,8 @@ class TtlLruCache {
 const routeCache = new TtlLruCache({ maxEntries: ROUTE_CACHE_MAX, ttlMs: ROUTE_CACHE_TTL_MS });
 // Tiempo + km por par de puntos (Route Matrix), para el horario de visitas
 const matrixCache = new TtlLruCache({ maxEntries: ROUTE_CACHE_MAX * 4, ttlMs: ROUTE_CACHE_TTL_MS });
+/** Matrices que se están pidiendo ahora a Google, por conjunto de puntos */
+const matrixInFlight = new Map();
 const workerRoutesCache = new TtlLruCache({ maxEntries: WORKER_CACHE_MAX, ttlMs: ROUTE_CACHE_TTL_MS });
 
 let googleRoutesCalls = 0;
@@ -564,6 +566,24 @@ function estimateTravel(origin, destination) {
  * @returns {Promise<{ durations: number[][], distances: number[][], source: 'google'|'estimate'|'mixed' }>}
  */
 async function computeTravelMatrix(points) {
+  // Peticiones simultáneas con los mismos puntos (p. ej. «Organizar» pide a la vez las opciones
+  // y «Tu orden»): la segunda espera a la primera y sale de la caché, sin pagar dos veces a Google
+  const key = points.map((p) => `${p.lat}|${p.lon}`).sort().join(';');
+  const running = matrixInFlight.get(key);
+  if (running) {
+    await running.catch(() => undefined);
+    return fetchTravelMatrix(points);
+  }
+  const request = fetchTravelMatrix(points);
+  matrixInFlight.set(key, request);
+  try {
+    return await request;
+  } finally {
+    matrixInFlight.delete(key);
+  }
+}
+
+async function fetchTravelMatrix(points) {
   const n = points.length;
   const durations = Array.from({ length: n }, () => new Array(n).fill(0));
   const distances = Array.from({ length: n }, () => new Array(n).fill(0));

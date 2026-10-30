@@ -263,6 +263,8 @@ export interface ScheduledVisit {
   wait: number;
   /** Minutos que llega tarde a su franja u hora fija (0 = a tiempo) */
   late: number;
+  /** Minutos de margen (tráfico + aparcar) incluidos en el trayecto hasta esta visita */
+  travel_margin?: number;
 }
 
 export interface UnscheduledVisit {

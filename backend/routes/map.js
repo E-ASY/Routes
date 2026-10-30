@@ -9,7 +9,13 @@ const dataService = require('../services/data');
 const routeService = require('../services/routes');
 const viewportService = require('../services/viewport');
 const { sendServerError } = require('../utils/errors');
-const { planDay, evaluateOrder, visitDurations } = require('../services/visitScheduler');
+const {
+  planDay,
+  evaluateOrder,
+  visitDurations,
+  withTravelMargin,
+  annotateTravelMargins,
+} = require('../services/visitScheduler');
 const {
   parseWorkers,
   parseMunicipalities,
@@ -206,7 +212,8 @@ router.post('/legs', routesLimiter, async (req, res) => {
  *          Solo aparta para otro día las visitas imposibles de encajar (franjas que se
  *          solapan o sin hueco en la jornada); si alguna llega tarde por el viaje se
  *          mantiene con su retraso (`late`). Hasta 3 opciones (menos km / terminar
- *          antes / menos esperas).
+ *          antes / menos esperas). Cada trayecto hacia una visita lleva un margen de
+ *          tráfico y aparcamiento (10 % + 3 min); la vuelta o la llegada final, no.
  * @body    { points: [{ lat, lon }, ...]  // partida, visitas y, con finish 'custom', llegada
  *            finish: 'start'|'last'|'custom',
  *            shift: { start, end },          // minutos desde medianoche
@@ -232,7 +239,7 @@ router.post('/schedule-visits', routesLimiter, async (req, res) => {
     const endNode = finish === 'custom' ? points.length - 1 : null;
     const visits = windows.map((_, i) => i + 1);
     const input = {
-      durations: matrix.durations,
+      durations: withTravelMargin(matrix.durations, visits),
       distances: matrix.distances,
       origin: 0,
       visits,
@@ -243,14 +250,22 @@ router.post('/schedule-visits', routesLimiter, async (req, res) => {
       serviceMinutes: services,
     };
     if (mode === 'manual') {
-      const manual = evaluateOrder({ ...input, goal });
+      const evaluated = evaluateOrder({ ...input, goal });
+      const manual = {
+        ...evaluated,
+        option: annotateTravelMargins(evaluated.option, matrix.durations, 0, visits),
+      };
       logger.debug(
         `POST /schedule-visits mode=manual visits=${visits.length} feasible=${manual.feasible} ` +
         `conflicts=${manual.conflicts.length} travel=${matrix.source}`
       );
       return res.json({ mode, ...manual, service_minutes: services, travel_source: matrix.source });
     }
-    const result = planDay(input);
+    const planned = planDay(input);
+    const result = {
+      ...planned,
+      options: planned.options.map((option) => annotateTravelMargins(option, matrix.durations, 0, visits)),
+    };
     logger.debug(
       `POST /schedule-visits visits=${visits.length} finish=${finish} ` +
       `options=${result.options.length} unscheduled=${result.unscheduled.length} ` +

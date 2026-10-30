@@ -11,6 +11,7 @@ Aplicación web para visualizar en mapa las asignaciones de trabajadoras de aten
 - Planificación del día de una trabajadora (PERF-013):
   - partida, visitas tocando usuarias en el mapa y final (volver, acabar en la última u otro sitio)
   - jornada, franjas de disponibilidad por usuaria (varias), hora fija y duración de cada visita
+  - cada trayecto hacia una visita lleva un margen de tráfico y aparcamiento (10 % + 3 min); la vuelta no
   - **Organizar**: horario con tiempos reales de coche y 3 opciones (menos km / termina antes / menos esperas), más «Tu orden»; vista previa de cada opción en el mapa
   - ajuste a mano (flechas o arrastrar), avisos de retraso o jornada alargada, «Para otro día» solo si es imposible encajarla
   - agenda con resumen del día, enviar/copiar agenda y enlaces a Google Maps

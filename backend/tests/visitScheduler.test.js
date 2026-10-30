@@ -9,7 +9,15 @@
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
-const { scheduleVisits, startIntervals, evaluateOrder, planDay } = require('../services/visitScheduler');
+const {
+  scheduleVisits,
+  startIntervals,
+  evaluateOrder,
+  planDay,
+  withTravelMargin,
+  annotateTravelMargins,
+  travelMarginMinutes,
+} = require('../services/visitScheduler');
 const { parseScheduleBody } = require('../utils/queryParams');
 
 const H = (h, m = 0) => h * 60 + m;
@@ -477,6 +485,54 @@ describe('planDay (solo se apartan las visitas imposibles)', () => {
     const r = planDay(input);
     assert.ok(r.ms < 15000, `tardó ${r.ms} ms`);
     assert.equal(r.options[0].visits.length + r.unscheduled.length, 14);
+  });
+});
+
+describe('margen por trayecto (tráfico + aparcar)', () => {
+  const ten = [
+    [0, 10, 10, 10],
+    [10, 0, 10, 10],
+    [10, 10, 0, 10],
+    [10, 10, 10, 0],
+  ];
+
+  it('10 % del viaje más 3 min para aparcar', () => {
+    assert.equal(travelMarginMinutes(10), 4);
+    assert.equal(travelMarginMinutes(30), 6);
+    assert.equal(travelMarginMinutes(0), 3);
+  });
+
+  it('solo en los trayectos que llegan a una visita; la vuelta y la llegada final no', () => {
+    // Visitas = nodos 1 y 2; el 0 es la partida y el 3 la llegada
+    const m = withTravelMargin(ten, [1, 2]);
+    assert.equal(m[0][1], 14);
+    assert.equal(m[1][2], 14);
+    assert.equal(m[2][0], 10);
+    assert.equal(m[2][3], 10);
+    assert.equal(m[1][1], 0);
+  });
+
+  it('el horario lo incluye y cada visita informa de su margen', () => {
+    // Sin franjas: sale 8:00, A 8:14–9:14, B 9:28–10:28, vuelve 10:38 (la vuelta sin margen)
+    const r = evaluateOrder({
+      durations: withTravelMargin(ten, [1, 2]),
+      distances: ten.map((row) => row.map((t) => t * 1000)),
+      origin: 0,
+      visits: [1, 2],
+      windows: [[], []],
+      shift: { start: H(8), end: H(15) },
+      finish: 'start',
+      serviceMinutes: 60,
+    });
+    const [a, b] = r.option.visits;
+    assert.equal(a.start, H(8, 14));
+    assert.equal(b.start, H(9, 28));
+    assert.equal(r.option.finish_time, H(10, 38));
+    const annotated = annotateTravelMargins(r.option, ten, 0, [1, 2]);
+    assert.deepEqual(
+      annotated.visits.map((v) => v.travel_margin),
+      [4, 4]
+    );
   });
 });
 
